@@ -1,0 +1,206 @@
+# Auto EA-SORAN: Work Division Plan for 4-Person Team
+
+---
+
+## 👥 Team Structure & Role Distribution
+
+### **TEAM MEMBER 1: ML/AI SYSTEMS ENGINEER**
+**Title: "Core AI & Prediction Systems Lead"**
+
+#### **Primary Responsibilities:**
+- **Enhanced ANN Model Development** 
+  - Integrate and optimize Farzi's FastAI/Keras models
+  - Implement real-time inference pipeline
+  - Add temporal feature engineering for live data streams
+  - Optimize model for edge deployment (quantization, pruning)
+
+- **AI Analytics & Explainability Engine** 
+  - Extend SHAP analysis for decision-level explainability
+  - Develop rule-based reasoning traces for configuration changes
+  - Build feature importance tracking for different BS types
+  - Create confidence scoring for predictions
+
+- **Predictive Analytics Module** 
+  - Implement demand forecasting algorithms
+  - Build anomaly detection for unusual energy patterns
+  - Develop adaptive learning mechanisms
+  - Create model performance monitoring
+
+#### **Key Deliverables:**
+- Enhanced ANN model with <100ms inference time
+- Real-time explainability dashboard showing decision reasoning
+- Predictive analytics module with 7-day forecasting
+- Model performance monitoring and auto-retraining pipeline
+
+#### **Technical Skills Required:**
+- Deep learning (PyTorch/TensorFlow, FastAI)
+- SHAP, LIME for explainable AI
+- Time series analysis, signal processing
+- Model optimization and deployment
+
+---
+
+### **TEAM MEMBER 2: SYSTEMS ARCHITECTURE & ORCHESTRATION ENGINEER**
+**Title: "Multi-Agent Orchestration & Integration Lead"**
+
+#### **Primary Responsibilities:**
+- **Multi-Agent Architecture Design** 
+  - Design ZeroMQ-based agent communication framework
+  - Implement modular agent interfaces (Prediction, Optimizer, Orchestrator, Feedback)
+  - Create agent lifecycle management and fault tolerance
+  - Design message passing protocols and data serialization
+
+- **Orchestration Engine Development** 
+  - Build Monitor → Predict → Optimize → Orchestrate → Feedback loop
+  - Implement configuration change management
+  - Create rollback and recovery mechanisms
+  - Develop agent coordination and synchronization
+
+- **Policy Framework & Configuration Management** 
+  - Design YAML/JSON-based policy definition system
+  - Implement static policy handler for energy-saving rules
+  - Create configuration templating and validation
+  - Build policy version control and management
+
+- **System Integration & Testing** 
+  - End-to-end system integration testing
+  - Performance benchmarking and optimization
+  - Documentation and deployment guides
+  - Integration with other team components
+
+#### **Key Deliverables:**
+- Multi-agent orchestration framework with ZeroMQ
+- Policy-driven configuration management system
+- Automated rollback and recovery mechanisms
+- Complete system integration with monitoring
+
+#### **Technical Skills Required:**
+- Distributed systems, message queues (ZeroMQ, RabbitMQ)
+- Python asyncio, multiprocessing
+- System architecture design
+- DevOps, containerization (Docker)
+
+---
+
+### **TEAM MEMBER 3: OPTIMIZATION & SIMULATION ENGINEER**
+**Title: "Multi-Objective Optimization & Simulation Lead"**
+
+#### **Primary Responsibilities:**
+- **Multi-Objective Optimizer Development** 
+  - Design optimization algorithms balancing energy vs QoS
+  - Implement genetic algorithms, particle swarm optimization
+  - Create constraint handling for QoS requirements
+  - Build Pareto frontier analysis for trade-off visualization
+
+- **NS-3/Simu5G Integration** 
+  - Set up NS-3 simulation environment for 5G scenarios
+  - Implement BS configuration testing in simulation
+  - Create simulation-in-the-loop validation pipeline
+  - Build performance metrics collection and analysis
+
+- **QoS Monitoring & Trade-off Analysis** 
+  - Implement QoS constraint validation
+  - Create trade-off analysis dashboards
+  - Build performance degradation detection
+  - Develop safety boundaries for configuration changes
+
+- **Multi-BS Coordination Logic** 
+  - Design inter-BS communication protocols
+  - Implement load balancing algorithms
+  - Create coordination strategies for energy optimization
+
+#### **Key Deliverables:**
+- Multi-objective optimization engine with Pareto analysis
+- NS-3 simulation integration for safe configuration testing
+- QoS vs energy trade-off monitoring system
+- Multi-BS coordination framework
+
+#### **Technical Skills Required:**
+- Optimization algorithms (genetic, PSO, multi-objective)
+- NS-3, Simu5G simulation platforms
+- Mathematical modeling, operations research
+- 5G/telecom domain knowledge
+
+---
+
+### **TEAM MEMBER 4: FEEDBACK SYSTEMS & DASHBOARD ENGINEER**
+**Title: "Monitoring, Feedback & Visualization Lead"**
+
+#### **Primary Responsibilities:**
+- **Real-time Monitoring & Data Pipeline** 
+  - Build real-time BS data collection pipeline
+  - Implement data preprocessing and validation
+  - Create streaming data ingestion (Kafka/RabbitMQ)
+  - Design data storage and retrieval systems
+
+- **Feedback Agent & Validation System** 
+  - Develop outcome validation and KPI monitoring
+  - Implement performance degradation detection
+  - Create automated alerting and notification system
+  - Build feedback loop for continuous learning
+
+- **Operator Dashboard Development** 
+  - Design Streamlit/Grafana-based operator interface
+  - Create real-time energy savings visualization
+  - Build decision timeline and explanation views
+  - Implement configuration change approval workflows
+
+- **Reporting & Analytics Interface** 
+  - Create automated reporting system
+  - Build energy savings ROI calculations
+  - Design executive summary dashboards
+  - Implement data export and API endpoints
+
+#### **Key Deliverables:**
+- Real-time monitoring and feedback validation system
+- Comprehensive operator dashboard with drill-down capabilities
+- Automated reporting with energy savings metrics
+- RESTful API for external system integration
+
+#### **Technical Skills Required:**
+- Web development (Streamlit, Flask, React/Vue)
+- Data visualization (Grafana, Plotly, D3.js)
+- Real-time data processing (Kafka, Redis)
+- Database design and optimization
+
+---
+
+## 🛠️ Technology Stack by Role
+
+### **Member 1 (ML/AI):**
+- **Primary:** Python, PyTorch/TensorFlow, FastAI, SHAP
+- **Secondary:** Docker, Redis, MLflow
+- **Tools:** Jupyter, Weights & Biases, TensorBoard
+
+### **Member 2 (Orchestration):**
+- **Primary:** Python, ZeroMQ, asyncio, Docker
+- **Secondary:** Kubernetes, Prometheus, YAML/JSON
+- **Tools:** Docker Compose, Postman, Git
+
+### **Member 3 (Optimization):**
+- **Primary:** Python, NS-3, Simu5G, SciPy
+- **Secondary:** C++, MATLAB, OptaPlanner
+- **Tools:** CMake, GDB, Mathematical modeling tools
+
+### **Member 4 (Dashboard):**
+- **Primary:** Python, Streamlit, Grafana, PostgreSQL
+- **Secondary:** React, Flask, Kafka, Redis
+- **Tools:** Tableau, Power BI, API testing tools
+
+---
+
+## 📊 Success Metrics & KPIs
+
+### **Individual KPIs:**
+- **Member 1:** Model accuracy >95%, inference time <100ms, explainability score >85%
+- **Member 2:** System uptime >99%, orchestration latency <1s, recovery time <30s
+- **Member 3:** Energy savings >20%, QoS degradation <5%, simulation accuracy >90%
+- **Member 4:** Dashboard response time <2s, monitoring coverage >95%, alert accuracy >90%
+
+### **Team KPIs:**
+- **System Integration:** End-to-end functionality with <5s total latency
+- **Energy Optimization:** Demonstrated >15% energy savings in simulation
+- **Explainability:** Human-interpretable decisions with reasoning traces
+- **Reliability:** 99%+ uptime with automated recovery
+
+---

@@ -1,0 +1,23 @@
+agent:
+  id: "prediction_agent_farzi_001"
+  name: "Farzi Enhanced Prediction Agent"
+
+model:
+  device: "cpu"  # or "cuda"
+  input_dim: 99
+
+training:
+  data_dir: ".venv/farzi_data/"
+  max_epochs: 100
+  early_stopping_patience: 10
+  learning_rate: 0.001
+  batch_size: 512
+
+communication:
+  request_port: 5556
+  response_port: 5557
+  #optimization_agent_port: 5557
+
+paths:
+  model_checkpoint: "models/energy_prediction_model.pth"
+  feature_engineer: "models/feature_engineer.pkl"

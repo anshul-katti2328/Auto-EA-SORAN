@@ -1,0 +1,170 @@
+[
+  {
+    "feature": "hour_spline_2",
+    "importance": 1.7795440930957056
+  },
+  {
+    "feature": "Bandwidth",
+    "importance": 1.5931904173411355
+  },
+  {
+    "feature": "hour_spline_1",
+    "importance": 1.5538331517136867
+  },
+  {
+    "feature": "load_smoothed",
+    "importance": 1.3531990501832702
+  },
+  {
+    "feature": "weekday_number",
+    "importance": 1.2300905699916052
+  },
+  {
+    "feature": "load_spline_6",
+    "importance": 0.7669298577116063
+  },
+  {
+    "feature": "TXpower",
+    "importance": 0.662396595982195
+  },
+  {
+    "feature": "load_spline_8",
+    "importance": 0.5191290835400734
+  },
+  {
+    "feature": "hour_spline_3",
+    "importance": 0.4946551701954563
+  },
+  {
+    "feature": "hour_spline_4",
+    "importance": 0.4315962830885182
+  },
+  {
+    "feature": "day",
+    "importance": 0.41526408744579296
+  },
+  {
+    "feature": "load_spline_10",
+    "importance": 0.3387881680247659
+  },
+  {
+    "feature": "load_spline_5",
+    "importance": 0.32745249005838645
+  },
+  {
+    "feature": "hour_spline_11",
+    "importance": 0.3038191298678922
+  },
+  {
+    "feature": "hour_spline_10",
+    "importance": 0.3029600262395668
+  },
+  {
+    "feature": "hour_spline_9",
+    "importance": 0.3015412548474719
+  },
+  {
+    "feature": "Frequency",
+    "importance": 0.2952749447698921
+  },
+  {
+    "feature": "load_spline_7",
+    "importance": 0.27459276401896954
+  },
+  {
+    "feature": "load",
+    "importance": 0.272403816889035
+  },
+  {
+    "feature": "hour_spline_0",
+    "importance": 0.25260195515997624
+  },
+  {
+    "feature": "load_spline_4",
+    "importance": 0.24744887279641614
+  },
+  {
+    "feature": "load_spline_9",
+    "importance": 0.21547288638881434
+  },
+  {
+    "feature": "load_lag_1",
+    "importance": 0.17636148614563682
+  },
+  {
+    "feature": "hour_spline_5",
+    "importance": 0.14473915523641956
+  },
+  {
+    "feature": "hour",
+    "importance": 0.14239572734087128
+  },
+  {
+    "feature": "load_spline_2",
+    "importance": 0.132066714813324
+  },
+  {
+    "feature": "load_lag_2",
+    "importance": 0.1244696534323082
+  },
+  {
+    "feature": "load_spline_3",
+    "importance": 0.1125367342261913
+  },
+  {
+    "feature": "hour_spline_8",
+    "importance": 0.09175352463645259
+  },
+  {
+    "feature": "load_spline_1",
+    "importance": 0.03351123839938736
+  },
+  {
+    "feature": "hour_spline_6",
+    "importance": 0.03058473985401634
+  },
+  {
+    "feature": "hour_spline_7",
+    "importance": 0.02924729942846105
+  },
+  {
+    "feature": "load_spline_0",
+    "importance": 0.025303151354374758
+  },
+  {
+    "feature": "hour_spline_12",
+    "importance": 0.024925904816275973
+  },
+  {
+    "feature": "Antennas",
+    "importance": 0.0
+  },
+  {
+    "feature": "ESMode6",
+    "importance": 0.0
+  },
+  {
+    "feature": "ESMode4",
+    "importance": 0.0
+  },
+  {
+    "feature": "ESMode5",
+    "importance": 0.0
+  },
+  {
+    "feature": "ESMode3",
+    "importance": 0.0
+  },
+  {
+    "feature": "ESMode2",
+    "importance": 0.0
+  },
+  {
+    "feature": "ESMode1",
+    "importance": 0.0
+  },
+  {
+    "feature": "w",
+    "importance": 0.0
+  }
+]

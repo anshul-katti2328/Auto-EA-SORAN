@@ -1,0 +1,323 @@
+2025-11-10 12:22:58,051 - INFO - ================================================================================
+2025-11-10 12:22:58,051 - INFO - KERAS ENERGY PREDICTION MODEL TRAINING
+2025-11-10 12:22:58,051 - INFO - ================================================================================
+2025-11-10 12:22:58,051 - INFO - Start time: 2025-11-10 12:22:58
+2025-11-10 12:22:58,051 - INFO - ================================================================================
+2025-11-10 12:22:58,051 - INFO - LOADING AND PREPARING DATA
+2025-11-10 12:22:58,051 - INFO - ================================================================================
+2025-11-10 12:22:58,051 - INFO - Loading data from: ../archive/imgs_2023071012133740345.csv
+2025-11-10 12:22:58,130 - INFO - ✓ Loaded 92629 rows
+2025-11-10 12:22:58,130 - INFO - Cleaning data...
+2025-11-10 12:22:58,134 - INFO - ✓ After cleaning: 92629 rows
+2025-11-10 12:22:58,134 - INFO - Applying feature engineering...
+2025-11-10 12:22:58,134 - INFO - Applying preprocessing...
+2025-11-10 12:22:58,219 - ERROR - Training failed: could not convert string to float: 'B_0'
+Traceback (most recent call last):
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/kerasTRAINER.py", line 406, in <module>
+    train_model(config)
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/kerasTRAINER.py", line 314, in train_model
+    X_train, X_val, y_train, y_val, feature_engineer = load_and_prepare_data(config)
+                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/kerasTRAINER.py", line 236, in load_and_prepare_data
+    X_continuous, X_categorical, y = feature_engineer.fit_transform(df_clean, target_col='Energy')
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/kerasTRAINER.py", line 143, in fit_transform
+    X_continuous = self.scaler.fit_transform(df_processed[continuous_features])
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/venv_fresh/lib/python3.12/site-packages/sklearn/utils/_set_output.py", line 316, in wrapped
+    data_to_wrap = f(self, X, *args, **kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/venv_fresh/lib/python3.12/site-packages/sklearn/base.py", line 894, in fit_transform
+    return self.fit(X, **fit_params).transform(X)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/venv_fresh/lib/python3.12/site-packages/sklearn/preprocessing/_data.py", line 907, in fit
+    return self.partial_fit(X, y, sample_weight)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/venv_fresh/lib/python3.12/site-packages/sklearn/base.py", line 1365, in wrapper
+    return fit_method(estimator, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/venv_fresh/lib/python3.12/site-packages/sklearn/preprocessing/_data.py", line 943, in partial_fit
+    X = validate_data(
+        ^^^^^^^^^^^^^^
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/venv_fresh/lib/python3.12/site-packages/sklearn/utils/validation.py", line 2954, in validate_data
+    out = check_array(X, input_name="X", **check_params)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/venv_fresh/lib/python3.12/site-packages/sklearn/utils/validation.py", line 1053, in check_array
+    array = _asarray_with_order(array, order=order, dtype=dtype, xp=xp)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/venv_fresh/lib/python3.12/site-packages/sklearn/utils/_array_api.py", line 757, in _asarray_with_order
+    array = numpy.asarray(array, order=order, dtype=dtype)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/venv_fresh/lib/python3.12/site-packages/pandas/core/generic.py", line 2171, in __array__
+    arr = np.asarray(values, dtype=dtype)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: could not convert string to float: 'B_0'
+2025-11-10 12:37:37,202 - INFO - ================================================================================
+2025-11-10 12:37:37,202 - INFO - KERAS ENERGY PREDICTION MODEL TRAINING
+2025-11-10 12:37:37,202 - INFO - ================================================================================
+2025-11-10 12:37:37,202 - INFO - Start time: 2025-11-10 12:37:37
+2025-11-10 12:37:37,202 - INFO - ================================================================================
+2025-11-10 12:37:37,202 - INFO - LOADING AND PREPARING DATA
+2025-11-10 12:37:37,202 - INFO - ================================================================================
+2025-11-10 12:37:37,202 - INFO - Loading data from: ../archive/imgs_2023071012133740345.csv
+2025-11-10 12:37:37,233 - INFO - ✓ Loaded 92629 rows
+2025-11-10 12:37:37,233 - INFO - Cleaning data...
+2025-11-10 12:37:37,237 - INFO - ✓ After cleaning: 92629 rows
+2025-11-10 12:37:37,237 - INFO - Applying feature engineering...
+2025-11-10 12:37:37,237 - INFO - Applying preprocessing...
+2025-11-10 12:37:37,279 - WARNING - Skipping non-numeric column: BS
+2025-11-10 12:37:37,279 - INFO - Identified 16 continuous features
+2025-11-10 12:37:37,306 - INFO - ✓ 16 continuous, 0 categorical
+2025-11-10 12:37:37,307 - INFO - ✓ Feature engineer saved to: models/feature_engineer_keras.pkl
+2025-11-10 12:37:37,307 - INFO - Splitting data (train: 80%, val: 20%)...
+2025-11-10 12:37:37,321 - INFO - ✓ Training samples: 74103
+2025-11-10 12:37:37,321 - INFO - ✓ Validation samples: 18526
+2025-11-10 12:37:37,321 - INFO - ✓ Target range: [0.75, 100.00]
+2025-11-10 12:37:37,322 - INFO - 
+================================================================================
+2025-11-10 12:37:37,322 - INFO - BUILDING MODEL
+2025-11-10 12:37:37,322 - INFO - ================================================================================
+2025-11-10 12:37:37,579 - INFO - ✓ Model built with 95,241 parameters
+2025-11-10 12:37:37,580 - INFO - 
+================================================================================
+2025-11-10 12:37:37,580 - INFO - TRAINING
+2025-11-10 12:37:37,580 - INFO - ================================================================================
+2025-11-10 12:37:37,580 - INFO - Epochs: 50
+2025-11-10 12:37:37,580 - INFO - Batch size: 64
+2025-11-10 12:37:37,580 - INFO - Learning rate: 0.001
+2025-11-10 12:37:37,641 - ERROR - Training failed: Missing data for input "RUType". You passed a data dictionary with keys ['continuous']. Expected the following keys: ['continuous', 'RUType', 'Mode', 'load_bin']
+Traceback (most recent call last):
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/kerasTRAINER.py", line 276, in <module>
+    train_model(config)
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/kerasTRAINER.py", line 213, in train_model
+    history = model.fit(
+              ^^^^^^^^^^
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/venv_fresh/lib/python3.12/site-packages/keras/src/utils/traceback_utils.py", line 122, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/venv_fresh/lib/python3.12/site-packages/keras/src/layers/input_spec.py", line 149, in assert_input_compatibility
+    raise ValueError(
+ValueError: Missing data for input "RUType". You passed a data dictionary with keys ['continuous']. Expected the following keys: ['continuous', 'RUType', 'Mode', 'load_bin']
+2025-11-10 12:44:59,694 - INFO - ================================================================================
+2025-11-10 12:44:59,694 - INFO - KERAS ENERGY PREDICTION MODEL TRAINING
+2025-11-10 12:44:59,694 - INFO - ================================================================================
+2025-11-10 12:44:59,694 - INFO - Start time: 2025-11-10 12:44:59
+2025-11-10 12:44:59,694 - INFO - ================================================================================
+2025-11-10 12:44:59,694 - INFO - LOADING AND PREPARING DATA
+2025-11-10 12:44:59,694 - INFO - ================================================================================
+2025-11-10 12:44:59,694 - INFO - Loading data from: ../archive/merged_training_data.csv
+2025-11-10 12:44:59,816 - INFO - ✓ Loaded 125690 rows
+2025-11-10 12:44:59,816 - INFO - Cleaning data...
+2025-11-10 12:44:59,824 - INFO - ✓ After cleaning: 125690 rows
+2025-11-10 12:44:59,825 - INFO - Applying feature engineering...
+2025-11-10 12:44:59,825 - INFO - Applying preprocessing...
+2025-11-10 12:44:59,904 - ERROR - Training failed: 'BSID'
+Traceback (most recent call last):
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/kerasTRAINER.py", line 276, in <module>
+    train_model(config)
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/kerasTRAINER.py", line 184, in train_model
+    X_train, X_val, y_train, y_val, feature_engineer = load_and_prepare_data(config)
+                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/kerasTRAINER.py", line 106, in load_and_prepare_data
+    X_continuous, X_categorical, y = feature_engineer.fit_transform(df_clean, target_col='Energy')
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/featureENGINEER.py", line 111, in fit_transform
+    df_processed = self.apply_farzi_preprocessing(df)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/featureENGINEER.py", line 84, in apply_farzi_preprocessing
+    df['load_lag_1'] = df.groupby('BSID')['load'].shift(1)
+                       ^^^^^^^^^^^^^^^^^^
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/venv_fresh/lib/python3.12/site-packages/pandas/core/frame.py", line 9210, in groupby
+    return DataFrameGroupBy(
+           ^^^^^^^^^^^^^^^^^
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/venv_fresh/lib/python3.12/site-packages/pandas/core/groupby/groupby.py", line 1331, in __init__
+    grouper, exclusions, obj = get_grouper(
+                               ^^^^^^^^^^^^
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/venv_fresh/lib/python3.12/site-packages/pandas/core/groupby/grouper.py", line 1043, in get_grouper
+    raise KeyError(gpr)
+KeyError: 'BSID'
+2025-11-10 12:49:24,916 - INFO - ================================================================================
+2025-11-10 12:49:24,916 - INFO - KERAS ENERGY PREDICTION MODEL TRAINING
+2025-11-10 12:49:24,916 - INFO - ================================================================================
+2025-11-10 12:49:24,916 - INFO - Start time: 2025-11-10 12:49:24
+2025-11-10 12:49:24,916 - INFO - ================================================================================
+2025-11-10 12:49:24,916 - INFO - LOADING AND PREPARING DATA
+2025-11-10 12:49:24,916 - INFO - ================================================================================
+2025-11-10 12:49:24,916 - INFO - Loading data from: ../archive/merged_training_data.csv
+2025-11-10 12:49:25,030 - INFO - ✓ Loaded 125690 rows
+2025-11-10 12:49:25,030 - INFO - Cleaning data...
+2025-11-10 12:49:25,037 - INFO - ✓ After cleaning: 125690 rows
+2025-11-10 12:49:25,037 - INFO - Applying feature engineering...
+2025-11-10 12:49:25,037 - INFO - Applying preprocessing...
+2025-11-10 12:49:25,037 - ERROR - Training failed: 'FarziFeatureEngineer' object has no attribute 'apply_farzi_preprocessing'
+Traceback (most recent call last):
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/kerasTRAINER.py", line 276, in <module>
+    train_model(config)
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/kerasTRAINER.py", line 184, in train_model
+    X_train, X_val, y_train, y_val, feature_engineer = load_and_prepare_data(config)
+                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/kerasTRAINER.py", line 106, in load_and_prepare_data
+    X_continuous, X_categorical, y = feature_engineer.fit_transform(df_clean, target_col='Energy')
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/featureENGINEER.py", line 128, in fit_transform
+    df_processed = self.apply_farzi_preprocessing(df)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'FarziFeatureEngineer' object has no attribute 'apply_farzi_preprocessing'
+2025-11-10 12:50:44,389 - INFO - ================================================================================
+2025-11-10 12:50:44,389 - INFO - KERAS ENERGY PREDICTION MODEL TRAINING
+2025-11-10 12:50:44,389 - INFO - ================================================================================
+2025-11-10 12:50:44,389 - INFO - Start time: 2025-11-10 12:50:44
+2025-11-10 12:50:44,389 - INFO - ================================================================================
+2025-11-10 12:50:44,390 - INFO - LOADING AND PREPARING DATA
+2025-11-10 12:50:44,390 - INFO - ================================================================================
+2025-11-10 12:50:44,390 - INFO - Loading data from: ../archive/merged_training_data.csv
+2025-11-10 12:50:44,523 - INFO - ✓ Loaded 125690 rows
+2025-11-10 12:50:44,523 - INFO - Cleaning data...
+2025-11-10 12:50:44,531 - INFO - ✓ After cleaning: 125690 rows
+2025-11-10 12:50:44,531 - INFO - Applying feature engineering...
+2025-11-10 12:50:44,531 - INFO - Applying preprocessing...
+2025-11-10 12:50:44,639 - INFO - Found categorical features: ['RUType', 'Mode', 'load_bin']
+2025-11-10 12:50:44,640 - INFO - Identified 42 continuous features
+2025-11-10 12:50:44,652 - INFO - Encoded RUType: 12 classes
+2025-11-10 12:50:44,664 - INFO - Encoded Mode: 2 classes
+2025-11-10 12:50:44,694 - INFO - Encoded load_bin: 100 classes
+2025-11-10 12:50:44,770 - INFO - ✓ 42 continuous, 3 categorical
+2025-11-10 12:50:44,774 - INFO - ✓ Feature engineer saved to: models/feature_engineer_keras.pkl
+2025-11-10 12:50:44,774 - INFO - Splitting data (train: 80%, val: 20%)...
+2025-11-10 12:50:44,817 - INFO - ✓ Training samples: 100552
+2025-11-10 12:50:44,817 - INFO - ✓ Validation samples: 25138
+2025-11-10 12:50:44,817 - INFO - ✓ Target range: [0.75, 100.00]
+2025-11-10 12:50:44,821 - INFO - 
+================================================================================
+2025-11-10 12:50:44,821 - INFO - BUILDING MODEL
+2025-11-10 12:50:44,821 - INFO - ================================================================================
+2025-11-10 12:50:45,118 - INFO - ✓ Model built with 95,241 parameters
+2025-11-10 12:50:45,118 - INFO - 
+================================================================================
+2025-11-10 12:50:45,118 - INFO - TRAINING
+2025-11-10 12:50:45,118 - INFO - ================================================================================
+2025-11-10 12:50:45,118 - INFO - Epochs: 50
+2025-11-10 12:50:45,118 - INFO - Batch size: 64
+2025-11-10 12:50:45,118 - INFO - Learning rate: 0.001
+2025-11-10 12:50:45,195 - ERROR - Training failed: Input 0 of layer "EnergyPredictionModel" is incompatible with the layer: expected shape=(None, 46), found shape=(None, 42)
+Traceback (most recent call last):
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/kerasTRAINER.py", line 276, in <module>
+    train_model(config)
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/kerasTRAINER.py", line 213, in train_model
+    history = model.fit(
+              ^^^^^^^^^^
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/venv_fresh/lib/python3.12/site-packages/keras/src/utils/traceback_utils.py", line 122, in error_handler
+    raise e.with_traceback(filtered_tb) from None
+  File "/media/rishi/New SSD/PROJECT_AND_RESEARCH/NOKIA/5G-Energy-Consumption-Modelling-Solution-Team-Farzi-Data-Scientists/CODE/venv_fresh/lib/python3.12/site-packages/keras/src/layers/input_spec.py", line 245, in assert_input_compatibility
+    raise ValueError(
+ValueError: Input 0 of layer "EnergyPredictionModel" is incompatible with the layer: expected shape=(None, 46), found shape=(None, 42)
+2025-11-10 12:52:34,558 - INFO - ================================================================================
+2025-11-10 12:52:34,558 - INFO - KERAS ENERGY PREDICTION MODEL TRAINING
+2025-11-10 12:52:34,558 - INFO - ================================================================================
+2025-11-10 12:52:34,558 - INFO - Start time: 2025-11-10 12:52:34
+2025-11-10 12:52:34,558 - INFO - ================================================================================
+2025-11-10 12:52:34,558 - INFO - LOADING AND PREPARING DATA
+2025-11-10 12:52:34,558 - INFO - ================================================================================
+2025-11-10 12:52:34,558 - INFO - Loading data from: ../archive/merged_training_data.csv
+2025-11-10 12:52:34,680 - INFO - ✓ Loaded 125690 rows
+2025-11-10 12:52:34,680 - INFO - Cleaning data...
+2025-11-10 12:52:34,687 - INFO - ✓ After cleaning: 125690 rows
+2025-11-10 12:52:34,687 - INFO - Applying feature engineering...
+2025-11-10 12:52:34,687 - INFO - Applying preprocessing...
+2025-11-10 12:52:34,784 - INFO - Found categorical features: ['RUType', 'Mode', 'load_bin']
+2025-11-10 12:52:34,785 - INFO - Identified 42 continuous features
+2025-11-10 12:52:34,795 - INFO - Encoded RUType: 12 classes
+2025-11-10 12:52:34,806 - INFO - Encoded Mode: 2 classes
+2025-11-10 12:52:34,835 - INFO - Encoded load_bin: 100 classes
+2025-11-10 12:52:34,904 - INFO - ✓ 42 continuous, 3 categorical
+2025-11-10 12:52:34,907 - INFO - 
+📊 DATA STATISTICS:
+2025-11-10 12:52:34,907 - INFO -    Continuous features: 42
+2025-11-10 12:52:34,907 - INFO -    Categorical features:
+2025-11-10 12:52:34,907 - INFO -       - RUType: 12 classes
+2025-11-10 12:52:34,907 - INFO -       - Mode: 2 classes
+2025-11-10 12:52:34,908 - INFO -       - load_bin: 100 classes
+2025-11-10 12:52:34,908 - INFO - ✓ Feature engineer saved to: models/feature_engineer_keras.pkl
+2025-11-10 12:52:34,908 - INFO - Splitting data (train: 80%, val: 20%)...
+2025-11-10 12:52:34,949 - INFO - ✓ Training samples: 100552
+2025-11-10 12:52:34,949 - INFO - ✓ Validation samples: 25138
+2025-11-10 12:52:34,949 - INFO - ✓ Target range: [0.75, 100.00]
+2025-11-10 12:52:34,953 - INFO - 
+================================================================================
+2025-11-10 12:52:34,953 - INFO - BUILDING MODEL
+2025-11-10 12:52:34,953 - INFO - ================================================================================
+2025-11-10 12:52:35,267 - INFO - ✓ Model built with 94,679 parameters
+2025-11-10 12:52:35,267 - INFO - 
+================================================================================
+2025-11-10 12:52:35,267 - INFO - TRAINING
+2025-11-10 12:52:35,267 - INFO - ================================================================================
+2025-11-10 12:52:35,267 - INFO - Epochs: 50
+2025-11-10 12:52:35,267 - INFO - Batch size: 64
+2025-11-10 12:52:35,267 - INFO - Learning rate: 0.001
+2025-11-10 12:53:34,928 - INFO - ================================================================================
+2025-11-10 12:53:34,928 - INFO - KERAS ENERGY PREDICTION MODEL TRAINING
+2025-11-10 12:53:34,928 - INFO - ================================================================================
+2025-11-10 12:53:34,928 - INFO - Start time: 2025-11-10 12:53:34
+2025-11-10 12:53:34,929 - INFO - ================================================================================
+2025-11-10 12:53:34,929 - INFO - LOADING AND PREPARING DATA
+2025-11-10 12:53:34,929 - INFO - ================================================================================
+2025-11-10 12:53:34,929 - INFO - Loading data from: ../archive/merged_training_data.csv
+2025-11-10 12:53:35,064 - INFO - ✓ Loaded 125690 rows
+2025-11-10 12:53:35,064 - INFO - Cleaning data...
+2025-11-10 12:53:35,072 - INFO - ✓ After cleaning: 125690 rows
+2025-11-10 12:53:35,072 - INFO - Applying feature engineering...
+2025-11-10 12:53:35,072 - INFO - Applying preprocessing...
+2025-11-10 12:53:35,185 - INFO - Found categorical features: ['RUType', 'Mode', 'load_bin']
+2025-11-10 12:53:35,186 - INFO - Identified 42 continuous features
+2025-11-10 12:53:35,201 - INFO - Encoded RUType: 12 classes
+2025-11-10 12:53:35,215 - INFO - Encoded Mode: 2 classes
+2025-11-10 12:53:35,255 - INFO - Encoded load_bin: 100 classes
+2025-11-10 12:53:35,334 - INFO - ✓ 42 continuous, 3 categorical
+2025-11-10 12:53:35,337 - INFO - 
+📊 DATA STATISTICS:
+2025-11-10 12:53:35,337 - INFO -    Continuous features: 42
+2025-11-10 12:53:35,337 - INFO -    Categorical features:
+2025-11-10 12:53:35,337 - INFO -       - RUType: 12 classes
+2025-11-10 12:53:35,337 - INFO -       - Mode: 2 classes
+2025-11-10 12:53:35,337 - INFO -       - load_bin: 100 classes
+2025-11-10 12:53:35,338 - INFO - ✓ Feature engineer saved to: models/feature_engineer_keras.pkl
+2025-11-10 12:53:35,338 - INFO - Splitting data (train: 80%, val: 20%)...
+2025-11-10 12:53:35,389 - INFO - ✓ Training samples: 100552
+2025-11-10 12:53:35,390 - INFO - ✓ Validation samples: 25138
+2025-11-10 12:53:35,390 - INFO - ✓ Target range: [0.75, 100.00]
+2025-11-10 12:53:35,394 - INFO - 
+================================================================================
+2025-11-10 12:53:35,395 - INFO - BUILDING MODEL
+2025-11-10 12:53:35,395 - INFO - ================================================================================
+2025-11-10 12:53:35,717 - INFO - ✓ Model built with 94,679 parameters
+2025-11-10 12:53:35,717 - INFO - 
+================================================================================
+2025-11-10 12:53:35,718 - INFO - TRAINING
+2025-11-10 12:53:35,718 - INFO - ================================================================================
+2025-11-10 12:53:35,718 - INFO - Epochs: 50
+2025-11-10 12:53:35,718 - INFO - Batch size: 64
+2025-11-10 12:53:35,718 - INFO - Learning rate: 0.001
+2025-11-10 12:59:09,791 - INFO - 
+================================================================================
+2025-11-10 12:59:09,792 - INFO - SAVING MODEL
+2025-11-10 12:59:09,792 - INFO - ================================================================================
+2025-11-10 12:59:09,851 - INFO - ✓ Model saved to: models/energy_prediction_keras.keras
+2025-11-10 12:59:09,852 - INFO - ✓ Training history saved to: models/training_history.json
+2025-11-10 12:59:09,852 - INFO - 
+================================================================================
+2025-11-10 12:59:09,852 - INFO - FINAL EVALUATION
+2025-11-10 12:59:09,852 - INFO - ================================================================================
+2025-11-10 12:59:10,648 - INFO - Validation Loss (MSE): 19.2994
+2025-11-10 12:59:10,649 - INFO - Validation MAE: 3.1411
+2025-11-10 12:59:10,649 - INFO - Validation RMSE: 4.3931
+2025-11-10 12:59:11,801 - INFO - 
+Sample Predictions vs Actual:
+2025-11-10 12:59:11,802 - INFO -   1. Predicted: 38.24, Actual: 38.86, Error: 0.62
+2025-11-10 12:59:11,802 - INFO -   2. Predicted: 35.58, Actual: 35.13, Error: 0.45
+2025-11-10 12:59:11,802 - INFO -   3. Predicted: 32.98, Actual: 33.03, Error: 0.06
+2025-11-10 12:59:11,802 - INFO -   4. Predicted: 54.66, Actual: 44.84, Error: 9.81
+2025-11-10 12:59:11,802 - INFO -   5. Predicted: 54.66, Actual: 60.84, Error: 6.18
+2025-11-10 12:59:11,802 - INFO - 
+================================================================================
+2025-11-10 12:59:11,802 - INFO - TRAINING COMPLETE!
+2025-11-10 12:59:11,802 - INFO - ================================================================================
+2025-11-10 12:59:11,802 - INFO - End time: 2025-11-10 12:59:11

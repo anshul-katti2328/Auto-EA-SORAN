@@ -1,0 +1,177 @@
+# Enhanced Multi-Objective Optimization Agent Configuration
+# with 3GPP Policy Integration using FAISS
+
+agent:
+  id: "optimization_agent_with_enhanced_zeromq_001"
+  name: "Enhanced Multi-Objective Optimization Agent with 3GPP Policy Integration"
+  version: "2.0"
+  description: "Advanced optimization agent with NSGA-II, 3GPP policy parsing, and LLM integration"
+
+# Optimization Algorithm Configuration
+optimization:
+  default_method: "genetic_algorithm"  # Uses NSGA-II for multi-objective optimization
+  population_size: 100                 # Population size for genetic algorithm
+  generations: 150                     # Number of generations to evolve
+  
+  # Base QoS Constraints (can be dynamically updated by 3GPP policies)
+  constraints:
+    min_throughput: 50.0              # Minimum throughput in Mbps
+    max_latency: 20.0                 # Maximum latency in ms
+    max_packet_loss: 0.01             # Maximum packet loss rate (1%)
+    max_tx_power: 43.0                # Maximum transmission power in dBm
+
+  # Optimization bounds for 5G parameters
+  bounds:
+    tx_power_range: [5.0, 43.0]       # TX power range in dBm
+    bandwidth_options: [5, 10, 15, 20, 25, 40, 50, 100]  # Available bandwidth in MHz
+    carrier_count_range: [1, 4]       # Carrier aggregation range
+    energy_saving_modes: 6            # Number of energy saving modes
+
+# 3GPP Policy Integration Configuration
+policy_texts:
+  - "3GPP TS 28.541: Network slice instances shall have maximum end-to-end latency < 10 ms for URLLC services"
+  - "3GPP TS 22.261: Enhanced mobile broadband minimum user data rate shall be > 100 Mbps in dense urban areas"
+  - "3GPP TS 38.300: Packet loss rate for eMBB services must not exceed 0.1%"
+  - "3GPP TS 28.530: Energy efficiency optimization should maintain QoS constraints while reducing power consumption"
+  - "3GPP TR 38.901: Maximum transmission power for gNB shall not exceed 43 dBm for macro cells"
+  - "3GPP TS 23.501: Network slice for autonomous vehicles requires latency < 5 ms and reliability > 99.999%"
+  - "3GPP TS 28.552: Industrial IoT applications need minimum throughput 1 Mbps with maximum latency 50 ms"
+  - "3GPP TS 38.401: Massive IoT connections should have packet loss < 0.01% and support up to 1M devices per km²"
+  - "3GPP TS 38.211: 5G NR downlink throughput optimization requires minimum 200 Mbps in urban scenarios"
+  - "3GPP TS 28.554: Network energy efficiency target: reduce power consumption by 30% while maintaining QoS"
+
+# Policy Integration Settings
+policy_integration:
+  enabled: true                       # Enable/disable policy integration
+  faiss_index_type: "IndexFlatIP"     # FAISS index type for similarity search
+  similarity_threshold: 0.3           # Minimum similarity score for policy matching
+  max_policies_per_query: 5           # Maximum number of policies to return per query
+  policy_weight: 0.8                  # Weight factor for policy-derived constraints
+
+# LLM Template Generation Configuration
+llm:
+  type: "openai"                      # Options: "openai", "huggingface", "local"
+  model: "gpt-3.5-turbo"              # Model to use for LLM generation
+  max_tokens: 2000                    # Maximum tokens in LLM response
+  temperature: 0.3                    # Temperature for response generation
+  
+  # Alternative: Hugging Face Configuration
+  # model_name: "microsoft/DialoGPT-medium"
+  
+  # Alternative: Local Model Configuration
+  # model_path: "/path/to/local/model"
+  
+  # LLM Generation Settings
+  enabled: true                       # Enable/disable LLM template generation
+  timeout_seconds: 30                 # Timeout for LLM API calls
+  retry_attempts: 3                   # Number of retry attempts for failed calls
+
+# OMNeT++ Orchestrator Integration
+orchestrator:
+  enabled: true                       # Enable/disable orchestrator integration
+  orchestrator_host: "localhost"      # Orchestrator host address
+  orchestrator_port: 5563             # Orchestrator ZeroMQ port
+  auto_execute: true                  # Automatically execute optimized configurations
+  execution_timeout: 300              # Timeout for execution in seconds
+  retry_attempts: 3                   # Number of retry attempts for failed executions
+  
+  # Execution Strategy
+  execution_phases:
+    energy_modes_duration: 5          # Duration for energy saving modes phase (minutes)
+    power_adjustment_duration: 5      # Duration for power adjustment phase (minutes)
+    bandwidth_optimization_duration: 5 # Duration for bandwidth optimization phase (minutes)
+  
+  # Monitoring Configuration
+  monitoring:
+    period_minutes: 30                # Monitoring period after optimization
+    alert_thresholds:
+      energy_increase_percent: 5      # Alert if energy increases by more than 5%
+      throughput_degradation_percent: 5 # Alert if throughput drops by more than 5%
+      latency_increase_percent: 10    # Alert if latency increases by more than 10%
+
+# ZeroMQ Communication Configuration
+communication:
+  prediction_agent_port: 5556         # Port for receiving predictions
+  request_port: 5558                  # Port for receiving optimization requests      
+  pub_port: 5557
+  feedback_host: 'localhost'
+  feedback_agent_port: 5559
+  prediction_host: 'localhost'
+  prediction_pull_port: 5557
+  # Socket Configuration
+  socket_timeout_ms: 5000             # Socket timeout in milliseconds
+  max_retry_attempts: 3               # Maximum retry attempts for socket operations
+  heartbeat_interval_seconds: 30      # Heartbeat interval for connection monitoring
+  feedback_reply_port: 5560          # Port to receive validation replies from Feedback Agent
+# Logging Configuration
+logging:
+  level: "INFO"                       # Logging level: DEBUG, INFO, WARNING, ERROR
+  file: "optimization_agent.log"      # Log file name
+  max_file_size_mb: 100              # Maximum log file size in MB
+  backup_count: 5                     # Number of backup log files to keep
+  
+  # Component-specific logging levels
+  components:
+    PolicyManager: "DEBUG"
+    LLMTemplateGenerator: "INFO"
+    MultiObjectiveOptimizer: "INFO"
+    OrchestratorInterface: "INFO"
+
+# Performance and Monitoring Configuration
+performance:
+  metrics_collection_enabled: true    # Enable performance metrics collection
+  metrics_export_interval_seconds: 60 # Interval for exporting metrics
+  memory_monitoring_enabled: true     # Enable memory usage monitoring
+  cpu_monitoring_enabled: true        # Enable CPU usage monitoring
+  
+  # Performance Thresholds
+  thresholds:
+    max_optimization_time_ms: 30000   # Maximum allowed optimization time
+    max_memory_usage_mb: 2048         # Maximum memory usage
+    max_cpu_usage_percent: 80         # Maximum CPU usage
+
+# Security Configuration (Optional)
+security:
+  enabled: false                      # Enable/disable security features
+  api_key_encryption: false          # Encrypt API keys in memory
+  secure_communication: false        # Use encrypted ZeroMQ communication
+  
+# Development and Testing Configuration
+development:
+  debug_mode: false                   # Enable debug mode for development
+  simulation_mode: false              # Enable simulation mode (no actual execution)
+  test_policy_injection: false       # Enable test policy injection
+  
+  # Test Policies for Development
+  test_policies:
+    - "Test policy: latency must be below 15 ms for testing"
+    - "Test policy: minimum throughput should exceed 75 Mbps for validation"
+
+# Advanced Configuration
+advanced:
+  # FAISS Configuration
+  faiss_settings:
+    index_factory: "Flat"             # FAISS index factory string
+    metric_type: "METRIC_INNER_PRODUCT" # Distance metric for FAISS
+    
+  # Genetic Algorithm Advanced Settings
+  genetic_algorithm:
+    crossover_probability: 0.8        # Crossover probability
+    mutation_probability: 0.4         # Initial mutation probability
+    selection_pressure: 2.0           # Selection pressure for NSGA-II
+    
+  # Energy Model Configuration
+  energy_model:
+    base_power_watts: 25.0           # Base power consumption for 5G gNB
+    tx_power_efficiency: 0.001       # TX power to energy conversion factor
+    processing_power_factor: 0.4     # Processing power factor for bandwidth
+    carrier_power_factor: 8.0        # Power factor per carrier
+    
+    # Energy Saving Mode Configurations
+    energy_saving_modes:
+      deep_sleep: 3.0                # Watts saved in deep sleep mode
+      light_sleep: 1.5               # Watts saved in light sleep mode
+      mimo_reduction: 2.0            # Watts saved with MIMO reduction
+      dtx_mode: 2.5                  # Watts saved with DTX mode
+      bwp_adaptation: 1.0            # Watts saved with BWP adaptation
+      rf_chain_sleep: 1.8            # Watts saved with RF chain sleep

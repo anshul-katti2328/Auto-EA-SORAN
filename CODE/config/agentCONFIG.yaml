@@ -1,0 +1,26 @@
+agent:
+  id: feedback_agent_001
+  heartbeat_interval: 30
+
+communication:
+  agent_id: feedback_agent_001
+  reply_port: 5560
+  pub_port: 5561
+  endpoints: {}
+
+validation:
+  timeout: 300
+
+monitoring:
+  check_interval: 10
+  post_change_window: 300
+
+rollback:
+  policies: []
+
+policies:
+  enforcement_levels:
+    CRITICAL: 0.0
+    HIGH: 0.1
+    MEDIUM: 0.2
+    LOW: 0.5

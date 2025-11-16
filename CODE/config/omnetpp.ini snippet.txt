@@ -1,0 +1,5 @@
+[Config Default]
+network = orchestration.MyNetwork
+
+**.agent.zmqPort = 5555
+**.shim.zmqPort = 6000
