@@ -35,53 +35,6 @@ Simu5G Simulation (Verify results)
     ↓
 [Loop continues...]
 
-🏗 System Architecture
-Component Stack
-
-text
-┌─────────────────────────────────────────────────────────────┐
-│                   Simu5G Simulation (OMNeT++)               │
-│  ┌────────────────────────────────────────────────────────┐ │
-│  │  TwinMetricsAgent (provides real-time network metrics) │ │
-│  │  OrchestrationShim (applies configuration changes)     │ │
-│  └────────────────────────────────────────────────────────┘ │
-└────┬──────────────────────────────────────┬─────────────────┘
-     │ ZMQ Pub/Sub                          │ ZMQ REQ/REP
-     │ Metrics Feed                         │ Commands
-     ↓                                      ↑
-┌─────────────────────────────────────────────────────────────┐
-│               Distributed Agent System (Python)              │
-│                                                              │
-│  ┌──────────────────┐  ┌──────────────────┐               │
-│  │ Prediction Agent │  │ Optimization Agnt│               │
-│  │ (Keras/TF)       │  │ (DEAP + FAISS)   │               │
-│  │ Port: 5555       │  │ Port: 5558       │               │
-│  └────────┬─────────┘  └────────┬─────────┘               │
-│           │                      │                         │
-│  ┌────────▼──────────────────────▼─────────┐             │
-│  │     Policy Manager (3GPP + Nokia)       │             │
-│  │     FAISS-based Policy Similarity       │             │
-│  │     Constraint Extraction & Validation  │             │
-│  └────────┬─────────────────────┬──────────┘             │
-│           │                     │                         │
-│  ┌────────▼──────────┐  ┌──────▼──────────┐             │
-│  │ Feedback Agent    │  │ Orchestration   │             │
-│  │ (Validation)      │  │ Agent (Exec)    │             │
-│  │ Port: 5560        │  │ Port: 5562      │             │
-│  └───────────────────┘  └────────┬────────┘             │
-│                                  │                       │
-│  Communication Layer (ZMQ):       │                       │
-│  - REQ/REP: Sync request-reply   │                       │
-│  - PUB/SUB: Async metrics stream │                       │
-│  - PUSH/PULL: Task queue         │                       │
-└──────────────────────────────────┼───────────────────────┘
-                                   │ ZMQ Cmd
-                                   ↓
-                          ┌─────────────────┐
-                          │ OrchestrationShim│
-                          │ (OMNeT++)        │
-                          └─────────────────┘
-
 Message Flow
 
     Simu5G → Prediction Agent: Publishes unseen network metrics via ZMQ PUB
