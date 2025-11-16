@@ -3,3 +3,4 @@ __pycache__/
 CODE/.venv/shap_plots/unknown
 venv_fresh/
 archive/
+.env
