@@ -1,23 +1,21 @@
 agent:
-  id: "prediction_agent_farzi_001"
-  name: "Farzi Enhanced Prediction Agent"
-
-model:
-  device: "cpu"  # or "cuda"
-  input_dim: 99
-
-training:
-  data_dir: ".venv/farzi_data/"
-  max_epochs: 100
-  early_stopping_patience: 10
-  learning_rate: 0.001
-  batch_size: 512
+  id: "prediction_agent_keras_001"
+  name: "Keras Energy Prediction Agent"
 
 communication:
-  request_port: 5556
-  response_port: 5557
-  #optimization_agent_port: 5557
+  request_port: 5555
+  optimization_agent_port: 5558
+  metrics_sub_endpoint: "tcp://127.0.0.1:5556"
 
 paths:
-  model_checkpoint: "models/energy_prediction_model.pth"
-  feature_engineer: "models/feature_engineer.pkl"
+  model_checkpoint: "models/energy_prediction_keras.keras"
+  feature_engineer: "models/feature_engineer_keras.pkl"
+  hardware_profiles: "Simu5G/auto-easoran-sim/BSinfo.csv"
+  shap_output_dir: "../OUTPUTs/shap"
+
+features:
+  # SHAP implementation (complex) : Set this as true when running in SHAP mode. While SHAP
+  # helps capture complex feature interactions, it significantly increases computation time
+  # and memory usage. For standard energy prediction tasks without SHAP, set to false.
+  use_shap: true 
+  shap_batch_size: 30
