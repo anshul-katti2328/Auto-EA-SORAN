@@ -97,81 +97,128 @@ class OptimizationCommunicationHandler:
         self.logger.info(f"Optimization communication handler initialized for agent {self.agent_id}")
 
     async def initialize(self):
-        """Initialize ZeroMQ sockets and connections"""
+        """Initialize ZeroMQ sockets using the configured port map."""
         try:
-        # ✅ PULL socket for receiving predictions (from prediction agent)
-            self.sockets['prediction_pull'] = self.context.socket(zmq.PULL)
-        # Try different port if 5555 is busy
-            prediction_port = self.config.get('prediction_port', 5558)
-            try:
-                self.sockets['prediction_pull'].bind(f"tcp://*:{prediction_port}")
-                self.logger.info(f"✅ Listening for predictions on PULL socket: port {prediction_port}")
-            except zmq.ZMQError as e:
-                if "Address already in use" in str(e):
-                    prediction_port = 5558  # Try alternative port
-                    self.sockets['prediction_pull'].bind(f"tcp://*:{prediction_port}")
-                    self.logger.info(f"✅ Listening for predictions on PULL socket: port {prediction_port} (fallback)")
-                else:
-                    raise
-        
-        # ✅ PULL socket for receiving responses from feedback agent
-            self.sockets['feedback_pull'] = self.context.socket(zmq.PULL)
-        # Try different port if 5557 is busy
-            response_port = self.config.get('response_port', 5557)
-            try:
-                self.sockets['feedback_pull'].bind(f"tcp://*:{response_port}")
-                self.logger.info(f"✅ Listening for feedback responses on PULL socket: port {response_port}")
-            except zmq.ZMQError as e:
-                if "Address already in use" in str(e):
-                    response_port = 5559  # Try alternative port
-                    self.sockets['feedback_pull'].bind(f"tcp://*:{response_port}")
-                    self.logger.info(f"✅ Listening for feedback responses on PULL socket: port {response_port} (fallback)")
-                else:
-                    raise
-        
-        # ✅ PUSH socket for sending to feedback agent (instead of REQ)
-            self.sockets['feedback_push'] = self.context.socket(zmq.PUSH)
-            feedback_port = self.endpoints.get('feedback_agent', {}).get('port', 5560)
-            self.sockets['feedback_push'].connect(f"tcp://localhost:{feedback_port}")
-            self.logger.info(f"✅ Connected PUSH socket to feedback agent: port {feedback_port}")
-        
-        # REQ sockets for other agents (if needed) - store as dict
-            self.sockets['request'] = {}
+            prediction_port = int(
+                self.config.get("prediction_port", 5558)
+            )
+            response_port = int(
+                self.config.get("response_port", 5559)
+            )
+            pub_port = int(
+                self.config.get("pub_port", 5564)
+            )
+
+            # PredictionAgent PUSH -> OptimizationAgent PULL
+            self.sockets["prediction_pull"] = self.context.socket(
+                zmq.PULL
+            )
+            self.sockets["prediction_pull"].setsockopt(
+                zmq.LINGER, 0
+            )
+            self.sockets["prediction_pull"].bind(
+                f"tcp://*:{prediction_port}"
+            )
+            self.logger.info(
+                "Listening for predictions on port %s",
+                prediction_port,
+            )
+
+            # FeedbackAgent PUSH -> OptimizationAgent PULL
+            self.sockets["feedback_pull"] = self.context.socket(
+                zmq.PULL
+            )
+            self.sockets["feedback_pull"].setsockopt(
+                zmq.LINGER, 0
+            )
+            self.sockets["feedback_pull"].bind(
+                f"tcp://*:{response_port}"
+            )
+            self.logger.info(
+                "Listening for feedback responses on port %s",
+                response_port,
+            )
+
+            # OptimizationAgent PUSH -> FeedbackAgent PULL
+            feedback_endpoint = self.endpoints.get(
+                "feedback_agent", {}
+            )
+            feedback_host = feedback_endpoint.get(
+                "host", "localhost"
+            )
+            feedback_port = int(
+                feedback_endpoint.get("port", 5560)
+            )
+
+            self.sockets["feedback_push"] = self.context.socket(
+                zmq.PUSH
+            )
+            self.sockets["feedback_push"].setsockopt(
+                zmq.LINGER, 0
+            )
+            self.sockets["feedback_push"].connect(
+                f"tcp://{feedback_host}:{feedback_port}"
+            )
+            self.logger.info(
+                "Connected to FeedbackAgent at %s:%s",
+                feedback_host,
+                feedback_port,
+            )
+
+            # Optional direct REQ connections to other agents.
+            self.sockets["request"] = {}
+
             for agent_name, endpoint in self.endpoints.items():
-                if agent_name not in ['feedback_agent']:  # Skip feedback agent - we use PUSH for that
-                    sock = self.context.socket(zmq.REQ)
-                    sock.connect(f"tcp://{endpoint['host']}:{endpoint['port']}")
-                    self.sockets['request'][agent_name] = sock
-        
-        # Publisher socket for broadcasting
-            pub_port = self.config.get('pub_port', 5556)
-            self.sockets['publisher'] = self.context.socket(zmq.PUB)
-            try:
-                self.sockets['publisher'].bind(f"tcp://*:{pub_port}")
-                self.logger.info(f"✅ Publisher socket bound to port {pub_port}")
-            except zmq.ZMQError as e:
-                if "Address already in use" in str(e):
-                    pub_port = 5570  # Try alternative port
-                    self.sockets['publisher'].bind(f"tcp://*:{pub_port}")
-                    self.logger.info(f"✅ Publisher socket bound to port {pub_port} (fallback)")
-                else:
-                    raise
-        
-        # Subscriber socket for receiving broadcasts
-            self.sockets['subscriber'] = self.context.socket(zmq.SUB)
-            self.sockets['subscriber'].subscribe("")  # Subscribe to all messages
-        
-        # Connect to other agents' publishers
-            for agent_name, endpoint in self.endpoints.items():
-                if 'pub_port' in endpoint:
-                    self.sockets['subscriber'].connect(
-                        f"tcp://{endpoint['host']}:{endpoint['pub_port']}"
+                if agent_name == "feedback_agent":
+                    continue
+
+                if "host" not in endpoint or "port" not in endpoint:
+                    continue
+
+                socket = self.context.socket(zmq.REQ)
+                socket.setsockopt(zmq.LINGER, 0)
+                socket.connect(
+                    f"tcp://{endpoint['host']}:{endpoint['port']}"
+                )
+                self.sockets["request"][agent_name] = socket
+
+            # OptimizationAgent status publisher
+            self.sockets["publisher"] = self.context.socket(
+                zmq.PUB
+            )
+            self.sockets["publisher"].setsockopt(zmq.LINGER, 0)
+            self.sockets["publisher"].bind(
+                f"tcp://*:{pub_port}"
+            )
+            self.logger.info(
+                "Optimization status publisher bound to port %s",
+                pub_port,
+            )
+
+            # Optional subscriber for broadcasts from other agents.
+            self.sockets["subscriber"] = self.context.socket(
+                zmq.SUB
+            )
+            self.sockets["subscriber"].setsockopt(zmq.LINGER, 0)
+            self.sockets["subscriber"].setsockopt_string(
+                zmq.SUBSCRIBE, ""
+            )
+
+            for endpoint in self.endpoints.values():
+                if "host" in endpoint and "pub_port" in endpoint:
+                    self.sockets["subscriber"].connect(
+                        f"tcp://{endpoint['host']}:"
+                        f"{endpoint['pub_port']}"
                     )
-        
-            self.logger.info("ZeroMQ sockets initialized successfully")
-        
-        except Exception as e:
-            raise CommunicationError(f"Failed to initialize communication: {e}")
+
+            self.logger.info(
+                "ZeroMQ sockets initialized successfully"
+            )
+
+        except Exception as error:
+            raise CommunicationError(
+                f"Failed to initialize communication: {error}"
+            ) from error
 
     def register_handlers(self, handlers: Dict[OptimizationMessageType, Callable]):
         """Register message handlers for different message types"""
@@ -217,76 +264,51 @@ class OptimizationCommunicationHandler:
             raise
 
     async def _handle_prediction_update(self):
-        """Handle incoming prediction and trigger optimization process"""
+        """Receive and dispatch a PredictionAgent message."""
         try:
-            if await self.sockets['prediction_pull'].poll(timeout=100, flags=zmq.POLLIN):
-                message_data = await self.sockets['prediction_pull'].recv_json(flags=zmq.NOBLOCK)
-            
-                bs_id = message_data.get('bs_id', 'unknown')
-                predicted_energy = message_data.get('predicted_energy', 0)
-                confidence = message_data.get('confidence', 0)
-            
-                self.logger.info(f"📥 Received prediction update: {bs_id}")
-            
-            # Process prediction and trigger optimization
-                if 'prediction_update' in self.handlers:
-                    await self.handlers['prediction_update'](message_data)
-            
-            # Send optimization response to FeedbackAgent
-                await self._send_optimization_to_feedback_agent(message_data)
-                
-        except zmq.Again:
-            pass
-        except Exception as e:
-            self.logger.error(f"Error handling prediction update: {e}")
+            raw_message = await self.sockets[
+                "prediction_pull"
+            ].recv_json(flags=zmq.NOBLOCK)
 
-# Add this method to send optimization results to FeedbackAgent
-    async def _send_optimization_to_feedback_agent(self, prediction_data: Dict[str, Any]):
-        """Send optimization response to FeedbackAgent for validation"""
-        try:
-            bs_id = prediction_data.get('bs_id', 'unknown')
-            predicted_energy = prediction_data.get('predicted_energy', 0)
-            confidence = prediction_data.get('confidence', 0)
-        
-        # Create optimization response payload
-            optimization_response = {
-            'plan_id': str(uuid.uuid4()),
-            'target_bs_id': bs_id,
-            'proposed_config': {
-                'tx_power': 25.0,  # Example optimization
-                'sleep_mode_enabled': True,
-                'carrier_aggregation': False,
-                'mimo_layers': 2
-            },
-            'expected_energy_saving': 15.0,  # 15% energy saving
-            'confidence_score': confidence,
-            'timestamp': datetime.now().isoformat(),
-            'metadata': {
-                'original_prediction': prediction_data,
-                'optimization_algorithm': 'basic_energy_saver',
-                'predicted_energy_consumption': predicted_energy
-            }
-            }
-        
-        # Send to FeedbackAgent
-            await self.send_optimization_response(optimization_response)
-        
-            self.logger.info(f"✅ Sent optimization response to FeedbackAgent for BS {bs_id}")
-        
-        except Exception as e:
-            self.logger.error(f"Failed to send optimization to FeedbackAgent: {e}")
+            message = self._deserialize_message(raw_message)
+
+            self.logger.info(
+                "Received prediction update from %s for BS %s",
+                message.sender_id,
+                message.payload.get("bs_id", "unknown"),
+            )
+
+            self.metrics["messages_received"] += 1
+            self.message_history.append(message)
+
+            await self._process_message(message)
+
+        except zmq.Again:
+            # No prediction is waiting.
+            pass
+
+        except Exception as error:
+            self.metrics["errors"] += 1
+            self.logger.error(
+                "Error handling prediction update: %s",
+                error,
+                exc_info=True,
+            )
 
     async def process_messages(self, timeout: float = 1.0):
         """Process incoming messages from all sockets"""
         try:
         # === PREDICTION_PULL SOCKET ===
-            if 'prediction_pull' in self.sockets:
-                await self._handle_prediction_update()
+            if "prediction_pull" in self.sockets:
+                # Drain a bounded batch instead of processing only
+                # one cell per communication-loop iteration.
+                for _ in range(100):
+                    await self._handle_prediction_update()
         
         # === FEEDBACK_PULL SOCKET ===
             if 'feedback_pull' in self.sockets:
                 try:
-                    if await self.sockets['feedback_pull'].poll(timeout=100, flags=zmq.POLLIN):
+                    if await self.sockets['feedback_pull'].poll(timeout=0, flags=zmq.POLLIN):
                         message_data = await self.sockets['feedback_pull'].recv_json(flags=zmq.NOBLOCK)
                 
                     # ✅ FIXED: Get plan_id instead of target_bs_id
@@ -314,7 +336,7 @@ class OptimizationCommunicationHandler:
         # === SUBSCRIBER SOCKET (broadcasts) ===
             if 'subscriber' in self.sockets:
                 try:
-                    if await self.sockets['subscriber'].poll(timeout=100, flags=zmq.POLLIN):
+                    if await self.sockets['subscriber'].poll(timeout=0, flags=zmq.POLLIN):
                         await self._handle_broadcast_message()
                 except zmq.Again:
                     pass
@@ -434,24 +456,6 @@ class OptimizationCommunicationHandler:
             pass  # No message available
         except Exception as e:
             self.logger.error(f"Error handling request: {e}")
-
-    async def _handle_prediction_update(self):
-        """Handle incoming prediction updates"""
-        try:
-            raw_message = await self.sockets['prediction_pull'].recv_json(zmq.NOBLOCK)
-            message = self._deserialize_message(raw_message)
-            
-            self.logger.debug(f"Received prediction update from {message.sender_id}")
-            self.metrics['messages_received'] += 1
-            self.message_history.append(message)
-            
-            # Process prediction update
-            await self._process_message(message)
-            
-        except zmq.Again:
-            pass  # No message available
-        except Exception as e:
-            self.logger.error(f"Error handling prediction update: {e}")
 
     async def _handle_broadcast_message(self):
         """Handle incoming broadcast messages"""
