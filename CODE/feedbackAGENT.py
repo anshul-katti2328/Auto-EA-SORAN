@@ -10,6 +10,8 @@ Enhanced with Nokia, 3GPP, and hybrid policies for 5G network optimization.
 import asyncio
 import logging
 import time
+import zmq
+import zmq.asyncio
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
@@ -42,23 +44,632 @@ from optimizationCOMM import OptimizationMessageType as MessageType, Optimizatio
 import logging
 
 class ValidationEngine:
-    def __init__(self, config): pass
-    async def validate_plan(self, plan, current_kpis, predicted_impact): 
-        return [{'passed': True, 'message': 'Basic validation passed'}]
-    async def predict_impact(self, proposed_config, current_kpis): 
-        return {'energy_saving': 15.0, 'latency_change': 2.0}
+    """Analytical validation using live KPIs and proposed settings."""
+
+    def __init__(self, config):
+        self.config = config
+
+        self.max_tx_power = float(
+            config.get("max_tx_power_dbm", 43.0)
+        )
+        self.min_tx_power = float(
+            config.get("min_tx_power_dbm", 5.0)
+        )
+        self.max_latency = float(
+            config.get("max_latency_ms", 20.0)
+        )
+        self.max_packet_loss = float(
+            config.get("max_packet_loss_pct", 1.0)
+        )
+        self.min_throughput = float(
+            config.get("min_throughput_mbps", 1.0)
+        )
+        self.min_throughput_retention = min(
+            1.0,
+            max(
+                0.0,
+                float(
+                    config.get(
+                        "min_throughput_retention", 0.80
+                    )
+                ),
+            ),
+        )
+        self.min_confidence = float(
+            config.get("min_confidence", 0.50)
+        )
+
+    async def predict_impact(
+        self,
+        proposed_config,
+        current_kpis,
+    ):
+        """Estimate the KPI impact of a proposed configuration."""
+
+        current_tx_power = float(current_kpis.tx_power)
+        proposed_tx_power = float(
+            proposed_config.get(
+                "tx_power_dbm",
+                proposed_config.get(
+                    "tx_power", current_tx_power
+                ),
+            )
+        )
+
+        es_mode = str(
+            proposed_config.get("es_mode", "active")
+        ).lower()
+
+        # Approximate savings aligned with TwinMetricsAgent.
+        es_saving_pct = {
+            "active": 0.0,
+            "normal": 0.0,
+            "sleep": 65.0,
+            "light_sleep": 40.0,
+            "carrier_off": 25.0,
+            "mimo_reduce": 10.0,
+            "micro_dtx": 15.0,
+        }.get(es_mode, 0.0)
+
+        latency_penalty_ms = {
+            "active": 0.0,
+            "normal": 0.0,
+            "sleep": 15.0,
+            "light_sleep": 5.0,
+            "carrier_off": 1.0,
+            "mimo_reduce": 1.5,
+            "micro_dtx": 2.0,
+        }.get(es_mode, 0.0)
+
+        # Conservative service-retention estimates for modes that
+        # keep the radio available. Deep sleep remains disruptive.
+        throughput_factor = {
+            "active": 1.00,
+            "normal": 1.00,
+            "sleep": 0.15,
+            "deep_sleep": 0.15,
+            "light_sleep": 0.90,
+            "rf_chain_sleep": 0.90,
+            "carrier_off": 0.80,
+            "mimo_reduce": 0.90,
+            "micro_dtx": 0.95,
+            "bwp_adaptation": 0.90,
+        }.get(es_mode, 1.00)
+
+        tx_reduction_db = max(
+            0.0,
+            current_tx_power - proposed_tx_power,
+        )
+
+        # TX-power reduction has a smaller supply-power effect
+        # than a complete ES-mode transition.
+        tx_saving_pct = min(
+            20.0,
+            tx_reduction_db * 1.5,
+        )
+
+        # Combine independent percentage reductions without
+        # simply adding percentages beyond 100%.
+        combined_energy_saving = 100.0 * (
+            1.0
+            - (1.0 - es_saving_pct / 100.0)
+            * (1.0 - tx_saving_pct / 100.0)
+        )
+
+        current_throughput = max(
+            0.0,
+            float(current_kpis.avg_throughput),
+        )
+
+        predicted_throughput = (
+            current_throughput
+            * throughput_factor
+        )
+
+        throughput_change = (
+            predicted_throughput - current_throughput
+        )
+
+        # Reducing TX power can modestly increase loss.
+        packet_loss_change = tx_reduction_db * 0.01
+
+        return {
+            "energy_saving": combined_energy_saving,
+            "latency_change": latency_penalty_ms,
+            "throughput_change": throughput_change,
+            "packet_loss_change": packet_loss_change,
+            "power_reduction": tx_reduction_db,
+            "prb_utilization_change": 0.0,
+            "predicted_tx_power": proposed_tx_power,
+            "selected_es_mode": es_mode,
+        }
+
+    async def validate_plan(
+        self,
+        plan,
+        current_kpis,
+        predicted_impact,
+    ):
+        """Run deterministic safety checks before policy checks."""
+
+        proposed_tx_power = float(
+            plan.proposed_config.get(
+                "tx_power_dbm",
+                plan.proposed_config.get(
+                    "tx_power",
+                    current_kpis.tx_power,
+                ),
+            )
+        )
+
+        proposed_es_mode = str(
+            plan.proposed_config.get(
+                "es_mode", "active"
+            )
+        ).lower()
+
+        active_users = max(
+            0,
+            int(current_kpis.active_users),
+        )
+
+        current_throughput = max(
+            0.0,
+            float(current_kpis.avg_throughput),
+        )
+
+        throughput_floor = (
+            current_throughput
+            * self.min_throughput_retention
+        )
+
+        if current_throughput >= self.min_throughput:
+            throughput_floor = max(
+                self.min_throughput,
+                throughput_floor,
+            )
+
+        predicted_latency = (
+            float(current_kpis.avg_latency)
+            + float(
+                predicted_impact.get(
+                    "latency_change", 0.0
+                )
+            )
+        )
+
+        predicted_throughput = (
+            current_throughput
+            + float(
+                predicted_impact.get(
+                    "throughput_change", 0.0
+                )
+            )
+        )
+
+        predicted_packet_loss = (
+            float(current_kpis.packet_loss_rate)
+            + float(
+                predicted_impact.get(
+                    "packet_loss_change", 0.0
+                )
+            )
+        )
+
+        predicted_energy_saving = float(
+            predicted_impact.get(
+                "energy_saving", 0.0
+            )
+        )
+
+        return [
+            {
+                "name": "tx_power_upper_bound",
+                "passed": (
+                    proposed_tx_power
+                    <= self.max_tx_power
+                ),
+                "critical": True,
+                "severity": "critical",
+                "message": (
+                    f"TX power {proposed_tx_power:.2f} dBm; "
+                    f"maximum is {self.max_tx_power:.2f} dBm"
+                ),
+            },
+            {
+                "name": "tx_power_lower_bound",
+                "passed": (
+                    proposed_tx_power
+                    >= self.min_tx_power
+                ),
+                "critical": True,
+                "severity": "critical",
+                "message": (
+                    f"TX power {proposed_tx_power:.2f} dBm; "
+                    f"minimum is {self.min_tx_power:.2f} dBm"
+                ),
+            },
+
+            {
+                "name": "latency_limit",
+                "passed": (
+                    predicted_latency
+                    <= self.max_latency
+                ),
+                "critical": True,
+                "severity": "critical",
+                "message": (
+                    f"Predicted latency "
+                    f"{predicted_latency:.2f} ms; maximum is "
+                    f"{self.max_latency:.2f} ms"
+                ),
+            },
+            {
+                "name": "packet_loss_limit",
+                "passed": (
+                    predicted_packet_loss
+                    <= self.max_packet_loss
+                ),
+                "critical": True,
+                "severity": "critical",
+                "message": (
+                    f"Predicted packet loss "
+                    f"{predicted_packet_loss:.4f}%; "
+                    f"maximum is "
+                    f"{self.max_packet_loss:.4f}%"
+                ),
+            },
+            {
+                "name": "throughput_retention",
+                "passed": (
+                    predicted_throughput
+                    >= throughput_floor
+                ),
+                "critical": True,
+                "severity": "critical",
+                "message": (
+                    f"Predicted throughput "
+                    f"{predicted_throughput:.3f} Mbps; "
+                    f"demand-aware floor is "
+                    f"{throughput_floor:.3f} Mbps "
+                    f"({self.min_throughput_retention:.0%} "
+                    f"of the current baseline)"
+                ),
+            },
+            {
+                "name": "active_user_sleep_protection",
+                "passed": not (
+                    proposed_es_mode in {
+                        "sleep",
+                        "deep_sleep",
+                    }
+                    and active_users > 0
+                ),
+                "critical": True,
+                "severity": "critical",
+                "message": (
+                    f"Requested ES mode is "
+                    f"{proposed_es_mode}; active users: "
+                    f"{active_users}"
+                ),
+            },
+            {
+                "name": "positive_energy_saving",
+                "passed": predicted_energy_saving >= 0.0,
+                "critical": False,
+                "severity": "medium",
+                "message": (
+                    f"Predicted energy saving is "
+                    f"{predicted_energy_saving:.2f}%"
+                ),
+            },
+            {
+                "name": "prediction_confidence",
+                "passed": (
+                    float(plan.confidence_score)
+                    >= self.min_confidence
+                ),
+                "critical": False,
+                "severity": "medium",
+                "message": (
+                    f"Plan confidence is "
+                    f"{float(plan.confidence_score):.3f}; "
+                    f"minimum preferred confidence is "
+                    f"{self.min_confidence:.3f}"
+                ),
+            },
+        ]
 
 class KPIMonitor:
-    def __init__(self, config): pass
-    async def start(self): pass
+    """Maintain the latest live KPI snapshot for every BS."""
+
+    def __init__(self, config):
+        self.config = config
+        self.metrics_endpoint = config.get(
+            "metrics_endpoint",
+            "tcp://127.0.0.1:5556",
+        )
+        self.snapshot_timeout = float(
+            config.get("snapshot_timeout", 5.0)
+        )
+
+        self.context = zmq.asyncio.Context.instance()
+        self.socket = None
+        self.listener_task = None
+        self.latest_snapshots = {}
+        self.running = False
+
+    async def start(self):
+        if self.running:
+            return
+
+        self.socket = self.context.socket(zmq.SUB)
+        self.socket.setsockopt(zmq.LINGER, 0)
+        self.socket.setsockopt_string(zmq.SUBSCRIBE, "")
+        self.socket.connect(self.metrics_endpoint)
+
+        self.running = True
+        self.listener_task = asyncio.create_task(
+            self._listen_for_metrics()
+        )
+
+    async def stop(self):
+        self.running = False
+
+        if self.listener_task is not None:
+            self.listener_task.cancel()
+
+            try:
+                await self.listener_task
+            except asyncio.CancelledError:
+                pass
+
+            self.listener_task = None
+
+        if self.socket is not None:
+            self.socket.close(linger=0)
+            self.socket = None
+
+    async def _listen_for_metrics(self):
+        while self.running:
+            try:
+                frames = await self.socket.recv_multipart()
+
+                if not frames:
+                    continue
+
+                payload = json.loads(
+                    frames[-1].decode("utf-8")
+                )
+
+                sim_time_s = float(
+                    payload.get("sim_time_s", 0.0)
+                )
+
+                for cell in payload.get("cells", []):
+                    self._store_cell_snapshot(
+                        cell,
+                        sim_time_s,
+                    )
+
+            except asyncio.CancelledError:
+                raise
+
+            except Exception as error:
+                logging.getLogger(
+                    "KPIMonitor"
+                ).error(
+                    "Failed to process metrics: %s",
+                    error,
+                    exc_info=True,
+                )
+                await asyncio.sleep(0.1)
+
+    def _store_cell_snapshot(
+        self,
+        cell: Dict[str, Any],
+        sim_time_s: float,
+    ):
+        bs_id = str(cell.get("bs_id", "unknown"))
+
+        power_w = max(
+            0.0,
+            float(cell.get("energy_consumption_w", 0.0)),
+        )
+        dl_mbps = max(
+            0.0,
+            float(cell.get("dl_mbps", 0.0)),
+        )
+        ul_mbps = max(
+            0.0,
+            float(cell.get("ul_mbps", 0.0)),
+        )
+
+        raw_es_modes = cell.get("es_modes", [0] * 6)
+        if not isinstance(raw_es_modes, (list, tuple)):
+            raw_es_modes = []
+
+        es_modes = []
+        for value in raw_es_modes[:6]:
+            try:
+                es_modes.append(
+                    1 if int(value) != 0 else 0
+                )
+            except (TypeError, ValueError):
+                es_modes.append(0)
+
+        es_modes.extend([0] * (6 - len(es_modes)))
+
+        efficiency_mbit_per_j = max(
+            0.0,
+            float(
+                cell.get(
+                    "energy_efficiency_mbit_per_j",
+                    0.0,
+                )
+            ),
+        )
+
+        if efficiency_mbit_per_j > 0.0:
+            energy_efficiency = (
+                efficiency_mbit_per_j * 1_000_000.0
+            )
+        elif power_w > 0.0:
+            energy_efficiency = (
+                (dl_mbps + ul_mbps)
+                * 1_000_000.0
+                / power_w
+            )
+            efficiency_mbit_per_j = (
+                energy_efficiency / 1_000_000.0
+            )
+        else:
+            energy_efficiency = 0.0
+
+        packet_loss_pct = max(
+            0.0,
+            min(
+                100.0,
+                float(cell.get("packet_loss_pct", 0.0)),
+            ),
+        )
+
+        raw_sleeping = cell.get(
+            "radio_sleeping",
+            False,
+        )
+        if isinstance(raw_sleeping, bool):
+            radio_sleeping = raw_sleeping
+        else:
+            radio_sleeping = (
+                str(raw_sleeping).strip().lower()
+                in {"1", "true", "yes"}
+            )
+
+        snapshot = KPISnapshot(
+            bs_id=bs_id,
+            timestamp=datetime.now(),
+            energy_consumption=power_w,
+            avg_throughput=dl_mbps,
+            avg_latency=max(
+                0.0,
+                float(cell.get("avg_latency_ms", 0.0)),
+            ),
+            packet_loss_rate=packet_loss_pct,
+            mac_tb_loss_rate=packet_loss_pct,
+            active_users=max(
+                0,
+                int(cell.get("active_ues", 0)),
+            ),
+            prb_utilization=max(
+                0.0,
+                min(
+                    100.0,
+                    float(cell.get("prb_util_pct", 0.0)),
+                ),
+            ),
+            tx_power=float(
+                cell.get("tx_power_dbm", 0.0)
+            ),
+            energy_efficiency=energy_efficiency,
+            sim_time_s=float(sim_time_s),
+            measurement_interval_s=max(
+                0.0,
+                float(
+                    cell.get(
+                        "measurement_interval_s",
+                        0.0,
+                    )
+                ),
+            ),
+            ul_throughput=ul_mbps,
+            generated_dl_throughput=max(
+                0.0,
+                float(
+                    cell.get(
+                        "generated_dl_mbps",
+                        0.0,
+                    )
+                ),
+            ),
+            available_prbs=max(
+                0,
+                int(cell.get("available_prbs", 0)),
+            ),
+            used_prbs=max(
+                0.0,
+                float(cell.get("used_prbs", 0.0)),
+            ),
+            interval_energy_j=max(
+                0.0,
+                float(
+                    cell.get("interval_energy_j", 0.0)
+                ),
+            ),
+            represented_interval_s=max(
+                0.0,
+                float(
+                    cell.get(
+                        "represented_interval_s",
+                        0.0,
+                    )
+                ),
+            ),
+            represented_energy_j=max(
+                0.0,
+                float(
+                    cell.get(
+                        "represented_energy_j",
+                        0.0,
+                    )
+                ),
+            ),            
+            energy_efficiency_mbit_per_j=(
+                efficiency_mbit_per_j
+            ),
+            sinr=float(
+                cell.get("avg_sinr_db", 0.0)
+            ),
+            es_mode=str(
+                cell.get("es_mode", "active")
+            ),
+            es_modes=es_modes,
+            physical_tx_power=float(
+                cell.get(
+                    "physical_tx_power_dbm",
+                    cell.get("tx_power_dbm", 0.0),
+                )
+            ),
+            radio_sleeping=radio_sleeping,
+            kpi_source=str(
+                cell.get("kpi_source", "unknown")
+            ),
+            energy_source=str(
+                cell.get(
+                    "energy_source",
+                    "analytical_load_model",
+                )
+            ),
+            loss_source="offered_vs_received_bytes",
+        )
+
+        self.latest_snapshots[bs_id] = snapshot
+
     async def get_current_kpis(self, bs_id):
-        from datetime import datetime
-        return type('KPI', (), {
-            'bs_id': bs_id, 'timestamp': datetime.now(), 'avg_latency': 12.0,
-            'avg_throughput': 85.0, 'packet_loss_rate': 0.05, 'energy_consumption': 1500.0,
-            'energy_efficiency': 2000.0, 'prb_utilization': 65.0, 'tx_power': 23.0,
-            'mac_tb_loss_rate': 0.02, 'active_users': 150
-        })()
+        bs_id = str(bs_id)
+        deadline = time.monotonic() + self.snapshot_timeout
+
+        while time.monotonic() < deadline:
+            snapshot = self.latest_snapshots.get(bs_id)
+
+            if snapshot is not None:
+                return snapshot
+
+            await asyncio.sleep(0.05)
+
+        raise ValidationError(
+            f"No live KPI snapshot available for BS {bs_id}"
+        )
 
 class RollbackEngine:
     def __init__(self, config): pass
@@ -135,24 +746,51 @@ class ValidationResult:
     policy_compliance_score: float = 0.0
     critical_policy_violations: int = 0
     policy_blocks_optimization: bool = False
-
-
+    
 @dataclass
 class KPISnapshot:
-    """Current network performance snapshot"""
+    """Current network performance snapshot."""
+
     bs_id: str
     timestamp: datetime
-    energy_consumption: float  # Joules
-    avg_throughput: float     # Mbps
-    avg_latency: float        # ms
-    packet_loss_rate: float   # percentage
-    mac_tb_loss_rate: float   # percentage
+
+    energy_consumption: float  # Average electrical power, W
+    avg_throughput: float      # DL throughput, Mbps
+    avg_latency: float         # ms
+    packet_loss_rate: float    # percentage
+    mac_tb_loss_rate: float    # percentage
     active_users: int
-    prb_utilization: float    # percentage
-    tx_power: float          # dBm
-    energy_efficiency: float  # Bytes per Joule
+    prb_utilization: float     # percentage
+    tx_power: float            # configured dBm
+    energy_efficiency: float   # bits per joule
 
+    sim_time_s: float = 0.0
+    measurement_interval_s: float = 0.0
 
+    ul_throughput: float = 0.0
+    generated_dl_throughput: float = 0.0
+
+    available_prbs: int = 0
+    used_prbs: float = 0.0
+
+    interval_energy_j: float = 0.0
+    represented_interval_s: float = 0.0
+    represented_energy_j: float = 0.0
+    energy_efficiency_mbit_per_j: float = 0.0
+
+    sinr: float = 0.0
+
+    es_mode: str = "active"
+    es_modes: List[int] = field(
+        default_factory=lambda: [0, 0, 0, 0, 0, 0]
+    )
+
+    physical_tx_power: float = 0.0
+    radio_sleeping: bool = False
+
+    kpi_source: str = "unknown"
+    energy_source: str = "unknown"
+    loss_source: str = "offered_vs_received_bytes"
 class FeedbackAgent:
     """
     Main Feedback Agent class implementing validation, monitoring,
@@ -544,9 +1182,11 @@ class FeedbackAgent:
         )
         
         policy_validation = validate_energy_plan_policies(
-            plan.target_bs_id, 
-            current_kpi_dict, 
-            predicted_kpi_dict
+            bs_id=plan.target_bs_id,
+            current_kpis=current_kpi_dict,
+            predicted_kpis=predicted_kpi_dict,
+            bs_type=bs_type,
+            active_services=active_services,
         )
         
         # Extract critical violations that block optimization
@@ -667,59 +1307,113 @@ class FeedbackAgent:
         
         return validation_result
     
-    def _calculate_predicted_kpis(self, current_kpis: Dict[str, float], 
-                                 predicted_impact: Dict[str, Any], 
-                                 proposed_config: Dict[str, Any]) -> Dict[str, float]:
-        """Calculate predicted KPI values after energy optimization"""
-        
+    def _calculate_predicted_kpis(
+        self,
+        current_kpis: Dict[str, float],
+        predicted_impact: Dict[str, Any],
+        proposed_config: Dict[str, Any],
+    ) -> Dict[str, float]:
+        """Calculate post-change KPIs from live measurements."""
+
         predicted_kpis = current_kpis.copy()
-        
-        # Apply predicted impacts from energy optimization
-        if 'latency_change' in predicted_impact:
-            predicted_kpis['avg_latency'] += predicted_impact['latency_change']
-        
-        if 'throughput_change' in predicted_impact:
-            predicted_kpis['avg_throughput'] += predicted_impact['throughput_change']
-        
-        if 'packet_loss_change' in predicted_impact:
-            predicted_kpis['packet_loss_rate'] += predicted_impact['packet_loss_change']
-            
-        if 'energy_saving' in predicted_impact:
-            # Positive energy saving means reduced consumption
-            current_consumption = predicted_kpis['energy_consumption']
-            energy_saving_ratio = predicted_impact['energy_saving'] / 100.0  # Convert percentage
-            predicted_kpis['energy_consumption'] = current_consumption * (1 - energy_saving_ratio)
-            
-            # Recalculate energy efficiency (bytes per joule)
-            if predicted_kpis['energy_consumption'] > 0:
-                # Energy efficiency = throughput / energy consumption
-                predicted_kpis['energy_efficiency'] = (
-                    predicted_kpis['avg_throughput'] * 1000000 / predicted_kpis['energy_consumption']
+
+        predicted_kpis["avg_latency"] = (
+            float(current_kpis["avg_latency"])
+            + float(
+                predicted_impact.get(
+                    "latency_change", 0.0
                 )
-        
-        if 'power_reduction' in predicted_impact:
-            predicted_kpis['tx_power'] -= predicted_impact['power_reduction']
-        
-        if 'prb_utilization_change' in predicted_impact:
-            predicted_kpis['prb_utilization'] += predicted_impact['prb_utilization_change']
-        
-        # Apply configuration-specific predictions
-        if 'tx_power' in proposed_config:
-            predicted_kpis['tx_power'] = proposed_config['tx_power']
-            
-        if 'sleep_mode_enabled' in proposed_config and proposed_config['sleep_mode_enabled']:
-            # Sleep mode reduces energy but might affect latency
-            predicted_kpis['energy_consumption'] *= 0.8  # 20% reduction
-            predicted_kpis['avg_latency'] *= 1.1  # 10% increase
-        
-        # Ensure values stay within realistic bounds
-        predicted_kpis['avg_latency'] = max(0.1, predicted_kpis['avg_latency'])
-        predicted_kpis['avg_throughput'] = max(1.0, predicted_kpis['avg_throughput'])
-        predicted_kpis['packet_loss_rate'] = max(0.0, min(100.0, predicted_kpis['packet_loss_rate']))
-        predicted_kpis['energy_consumption'] = max(100.0, predicted_kpis['energy_consumption'])
-        predicted_kpis['tx_power'] = max(-50.0, min(50.0, predicted_kpis['tx_power']))  # dBm bounds
-        predicted_kpis['prb_utilization'] = max(0.0, min(100.0, predicted_kpis['prb_utilization']))
-        
+            )
+        )
+
+        predicted_kpis["avg_throughput"] = (
+            float(current_kpis["avg_throughput"])
+            + float(
+                predicted_impact.get(
+                    "throughput_change", 0.0
+                )
+            )
+        )
+
+        predicted_kpis["packet_loss_rate"] = (
+            float(current_kpis["packet_loss_rate"])
+            + float(
+                predicted_impact.get(
+                    "packet_loss_change", 0.0
+                )
+            )
+        )
+
+        predicted_kpis["prb_utilization"] = (
+            float(current_kpis["prb_utilization"])
+            + float(
+                predicted_impact.get(
+                    "prb_utilization_change", 0.0
+                )
+            )
+        )
+
+        energy_saving_pct = max(
+            0.0,
+            min(
+                100.0,
+                float(
+                    predicted_impact.get(
+                        "energy_saving", 0.0
+                    )
+                ),
+            ),
+        )
+
+        predicted_kpis["energy_consumption"] = (
+            float(current_kpis["energy_consumption"])
+            * (1.0 - energy_saving_pct / 100.0)
+        )
+
+        predicted_kpis["tx_power"] = float(
+            proposed_config.get(
+                "tx_power_dbm",
+                proposed_config.get(
+                    "tx_power",
+                    current_kpis["tx_power"],
+                ),
+            )
+        )
+
+        # Apply only physical lower bounds. Do not clamp invalid
+        # proposals into compliance before policy validation.
+        predicted_kpis["avg_latency"] = max(
+            0.1,
+            predicted_kpis["avg_latency"],
+        )
+        predicted_kpis["avg_throughput"] = max(
+            0.0,
+            predicted_kpis["avg_throughput"],
+        )
+        predicted_kpis["packet_loss_rate"] = max(
+            0.0,
+            predicted_kpis["packet_loss_rate"],
+        )
+        predicted_kpis["prb_utilization"] = max(
+            0.0,
+            min(
+                100.0,
+                predicted_kpis["prb_utilization"],
+            ),
+        )
+        predicted_kpis["energy_consumption"] = max(
+            0.1,
+            predicted_kpis["energy_consumption"],
+        )
+
+        # Throughput in bit/s divided by power in joule/s
+        # produces energy efficiency in bit/joule.
+        predicted_kpis["energy_efficiency"] = (
+            predicted_kpis["avg_throughput"]
+            * 1_000_000.0
+            / predicted_kpis["energy_consumption"]
+        )
+
         return predicted_kpis
     
     async def _generate_comprehensive_recommendations(self, plan: EnergyPlan, 
@@ -1325,7 +2019,7 @@ def main():
     """Main entry point for running the Enhanced Feedback Agent"""
     import sys
     
-    config_path = sys.argv[1] if len(sys.argv) > 1 else "config/agentConfig.yaml"
+    config_path = sys.argv[1] if len(sys.argv) > 1 else "config/agentCONFIG.yaml"
     
     agent = FeedbackAgent(config_path)
     
