@@ -3,23 +3,24 @@
 Communication Handler for Feedback Agent
 Manages ZeroMQ-based messaging with other agents in the Auto EA-SORAN system.
 """
-
+import sys
 import asyncio
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(
+        asyncio.WindowsSelectorEventLoopPolicy()
+    )
 import zmq
 import zmq.asyncio
 import json
 import time
 import logging
 from typing import Dict, List, Callable, Any, Optional
+from dataclasses import asdict, dataclass, is_dataclass
+from datetime import date, datetime
 from enum import Enum
-from dataclasses import dataclass
 import uuid
-from datetime import datetime
 from optimizationCOMM import OptimizationMessageType as MessageType, OptimizationMessage as Message
-
 import logging
-
-# Lines 21-22 - REPLACE this function
 
 def get_logger(name: str):
     """Setup logger with console handler"""
@@ -84,51 +85,108 @@ class CommunicationHandler:
         
         self.logger.info(f"Communication handler initialized for agent {self.agent_id}")
     
-    # Lines 67-95 - Replace entire initialize method
-
     async def initialize(self):
-        """Initialize ZeroMQ sockets and connections"""
+        """Initialize FeedbackAgent ZeroMQ communication."""
         try:
-        # ✅ MAIN: Create PULL socket for receiving optimization responses  
-            self.sockets['validation_pull'] = self.context.socket(zmq.PULL)
-            self.sockets['validation_pull'].bind(f"tcp://*:{self.config['reply_port']}")
-        
-            self.logger.info(f"✅ Listening for validation requests on PULL socket: port {self.config['reply_port']}")
-        
-        # ✅ Create PUSH sockets for sending responses back to optimization agent
-            self.sockets['optimization_push'] = self.context.socket(zmq.PUSH)
-        # Connect to optimization agent's response port (5557)
-            self.sockets['optimization_push'].connect("tcp://localhost:5557")
-            self.logger.info("✅ Connected PUSH socket to optimization agent response port 5557")
-        
-        # Create request sockets for sending to other agents (if needed)
-            self.sockets['request'] = {}
+            validation_port = int(
+                self.config.get("reply_port", 5560)
+            )
+            response_host = self.config.get(
+                "optimization_response_host",
+                "localhost",
+            )
+            response_port = int(
+                self.config.get(
+                    "optimization_response_port", 5559
+                )
+            )
+            pub_port = int(
+                self.config.get("pub_port", 5561)
+            )
+
+            # OptimizationAgent PUSH -> FeedbackAgent PULL
+            self.sockets["validation_pull"] = (
+                self.context.socket(zmq.PULL)
+            )
+            self.sockets["validation_pull"].setsockopt(
+                zmq.LINGER, 0
+            )
+            self.sockets["validation_pull"].bind(
+                f"tcp://*:{validation_port}"
+            )
+
+            self.logger.info(
+                "Listening for validation requests on port %s",
+                validation_port,
+            )
+
+            # FeedbackAgent PUSH -> OptimizationAgent PULL
+            self.sockets["optimization_push"] = (
+                self.context.socket(zmq.PUSH)
+            )
+            self.sockets["optimization_push"].setsockopt(
+                zmq.LINGER, 0
+            )
+            self.sockets["optimization_push"].connect(
+                f"tcp://{response_host}:{response_port}"
+            )
+
+            self.logger.info(
+                "Connected to OptimizationAgent at %s:%s",
+                response_host,
+                response_port,
+            )
+
+            # Optional direct request connections.
+            self.sockets["request"] = {}
+
             for agent_name, endpoint in self.endpoints.items():
-                if agent_name != 'optimization_agent':  # Skip optimization agent - we use PUSH for that
-                    sock = self.context.socket(zmq.REQ)
-                    sock.connect(f"tcp://{endpoint['host']}:{endpoint['port']}")
-                    self.sockets['request'][agent_name] = sock
-        
-        # Create publisher socket for broadcasting
-            pub_port = self.config.get('pub_port', 5561)
-            self.sockets['publisher'] = self.context.socket(zmq.PUB)
-            self.sockets['publisher'].bind(f"tcp://*:{pub_port}")
-        
-        # Create subscriber socket for receiving broadcasts
-            self.sockets['subscriber'] = self.context.socket(zmq.SUB)
-            self.sockets['subscriber'].subscribe("")  # Subscribe to all messages
-        
-        # Connect to other agents' publishers
-            for agent_name, endpoint in self.endpoints.items():
-                if 'pub_port' in endpoint:
-                    self.sockets['subscriber'].connect(
-                        f"tcp://{endpoint['host']}:{endpoint['pub_port']}"
+                if agent_name == "optimization_agent":
+                    continue
+
+                if "host" not in endpoint or "port" not in endpoint:
+                    continue
+
+                socket = self.context.socket(zmq.REQ)
+                socket.setsockopt(zmq.LINGER, 0)
+                socket.connect(
+                    f"tcp://{endpoint['host']}:{endpoint['port']}"
+                )
+                self.sockets["request"][agent_name] = socket
+
+            # FeedbackAgent status publisher
+            self.sockets["publisher"] = self.context.socket(
+                zmq.PUB
+            )
+            self.sockets["publisher"].setsockopt(zmq.LINGER, 0)
+            self.sockets["publisher"].bind(
+                f"tcp://*:{pub_port}"
+            )
+
+            # Subscribe to configured agent publishers.
+            self.sockets["subscriber"] = self.context.socket(
+                zmq.SUB
+            )
+            self.sockets["subscriber"].setsockopt(zmq.LINGER, 0)
+            self.sockets["subscriber"].setsockopt_string(
+                zmq.SUBSCRIBE, ""
+            )
+
+            for endpoint in self.endpoints.values():
+                if "host" in endpoint and "pub_port" in endpoint:
+                    self.sockets["subscriber"].connect(
+                        f"tcp://{endpoint['host']}:"
+                        f"{endpoint['pub_port']}"
                     )
-        
-            self.logger.info("ZeroMQ sockets initialized successfully")
-        
-        except Exception as e:
-            raise CommunicationError(f"Failed to initialize communication: {e}")
+
+            self.logger.info(
+                "FeedbackAgent ZeroMQ sockets initialized"
+            )
+
+        except Exception as error:
+            raise CommunicationError(
+                f"Failed to initialize communication: {error}"
+            ) from error
     
     def register_handlers(self, handlers: Dict[MessageType, Callable]):
         """Register message handlers for different message types"""
@@ -147,7 +205,7 @@ class CommunicationHandler:
                     if await self.sockets['validation_pull'].poll(timeout=int(timeout * 1000), flags=zmq.POLLIN):
                         message_data = await self.sockets['validation_pull'].recv_json(flags=zmq.NOBLOCK)
                 
-                    # ✅ Use correct payload structure
+                    # [OK] Use correct payload structure
                         bs_id = message_data.get('payload', {}).get('target_bs_id', 'unknown')
                         self.logger.info(f"📥 Received validation request: {bs_id}")
                         self.logger.info(f"   Message type: {message_data.get('message_type', 'unknown')}")
@@ -156,7 +214,7 @@ class CommunicationHandler:
                         payload = message_data.get('payload', {})
             
                         try:
-                            # ✅ Handle message type conversion properly
+                            # [OK] Handle message type conversion properly
                             if message_type_str in ['optimization_response', 'OPTIMIZATION_RESPONSE']:
                                 message_type = MessageType.OPTIMIZATION_RESPONSE
                             else:
@@ -166,12 +224,12 @@ class CommunicationHandler:
                                     self.logger.warning(f"Unknown message type: {message_type_str}")
                                     return
                 
-                        # ✅ Use self.handlers (correct attribute name)
+                        # [OK] Use self.handlers (correct attribute name)
                             if message_type in self.handlers:
                                 response = await self.handlers[message_type](payload)
                                 self.logger.info(f"Handler response: {response}")
                             
-                            # ✅ Send response back using PUSH socket instead of REQ
+                            # [OK] Send response back using PUSH socket instead of REQ
                                 if response and 'optimization_push' in self.sockets:
                                     response_message = {
                                     'message_type': 'validation_result',
@@ -181,10 +239,10 @@ class CommunicationHandler:
                                     'reply_to': message_data.get('message_id')
                                     }
                                 
-                                    await self.sockets['optimization_push'].send_json(response_message)
-                                    self.logger.info(f"✅ Sent validation result back to optimization agent for {bs_id}")
+                                    await self.sockets['optimization_push'].send_json(self._make_json_safe(response_message))
+                                    self.logger.info(f"[OK] Sent validation result back to optimization agent for {bs_id}")
                             
-                                self.logger.info(f"✅ Validation completed for {bs_id}")
+                                self.logger.info(f"[OK] Validation completed for {bs_id}")
                             else:
                                 self.logger.warning(f"No handler for message type: {message_type}")
                         
@@ -218,8 +276,8 @@ class CommunicationHandler:
         """Send validation response back to optimization agent"""
         try:
             if 'optimization_push' in self.sockets:
-                await self.sockets['optimization_push'].send_json(response_data)
-                self.logger.info("✅ Validation response sent to optimization agent")
+                await self.sockets['optimization_push'].send_json(self._make_json_safe(response_data))
+                self.logger.info("[OK] Validation response sent to optimization agent")
                 self.metrics['messages_sent'] += 1
             else:
                 self.logger.error("No optimization_push socket available")
@@ -427,10 +485,45 @@ class CommunicationHandler:
         }
         
         await self.broadcast(MessageType.HEARTBEAT, heartbeat_payload)
-    
+    @staticmethod
+    def _make_json_safe(value: Any) -> Any:
+        """Recursively convert supported values into JSON-safe objects."""
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+
+        if isinstance(value, Enum):
+            return CommunicationHandler._make_json_safe(value.value)
+
+        if is_dataclass(value):
+            return CommunicationHandler._make_json_safe(asdict(value))
+
+        if isinstance(value, dict):
+            return {
+                str(key): CommunicationHandler._make_json_safe(item)
+                for key, item in value.items()
+            }
+
+        if isinstance(value, (list, tuple, set)):
+            return [
+                CommunicationHandler._make_json_safe(item)
+                for item in value
+            ]
+
+        # Handles NumPy scalar values without importing NumPy here.
+        item_method = getattr(value, "item", None)
+        if callable(item_method):
+            return CommunicationHandler._make_json_safe(item_method())
+
+        raise TypeError(
+            f"Unsupported JSON value type: {type(value).__name__}"
+        )
+
     def _serialize_message(self, message: Message) -> Dict[str, Any]:
-        """Serialize message object to dictionary"""
-        return {
+        """Serialize a message and all nested payload values safely."""
+        serialized = {
             'message_id': message.message_id,
             'sender_id': message.sender_id,
             'recipient_id': message.recipient_id,
@@ -440,6 +533,7 @@ class CommunicationHandler:
             'reply_to': message.reply_to,
             'correlation_id': message.correlation_id
         }
+        return self._make_json_safe(serialized)
     
     def _deserialize_message(self, data: Dict[str, Any]) -> Message:
         """Deserialize dictionary to message object"""
