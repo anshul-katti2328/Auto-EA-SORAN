@@ -2,7 +2,7 @@
 Prediction Agent for Auto EA-SORAN System - Keras Backend
 Migrated from PyTorch to Keras/TensorFlow
 """
-
+import sys
 import asyncio
 import zmq
 import zmq.asyncio
@@ -13,11 +13,18 @@ import logging
 import time
 import uuid
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Tuple, Any, Optional
 import yaml
 from dataclasses import dataclass, asdict
 import warnings
+from pathlib import Path
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(
+        asyncio.WindowsSelectorEventLoopPolicy()
+    )
+
+SIMULATION_EPOCH = datetime(2025, 1, 1, tzinfo=timezone.utc).timestamp()
 
 from inferenceENGINE import KerasEnergyPredictor  # ← FIXED IMPORT
 
@@ -83,19 +90,132 @@ class PredictionAgent:
         self.shap_batch_size = self.config.get('features', {}).get('shap_batch_size', 5)
         self.shap_batch_buffer = []
         self.shap_plots_generated = 0
+        shap_output_setting = self.config.get(
+            "paths",
+            {},
+        ).get(
+            "shap_output_dir",
+            "../OUTPUTs/shap",
+        )
+
+        self.shap_output_dir = Path(
+            shap_output_setting
+        ).expanduser()
+
+        if not self.shap_output_dir.is_absolute():
+            self.shap_output_dir = (
+                Path(__file__).resolve().parent
+                / self.shap_output_dir
+            ).resolve()
         
         # Store recent samples for SHAP analysis
         self.recent_samples = []
         self.max_recent_samples = 100
         
-        # Check if model exists
-        model_path = self.config['paths']['model_checkpoint']
-        feature_path = self.config['paths']['feature_engineer']
+        # Resolve trained-model artifacts independently of the directory from which this agent is launched.
+        def resolve_required_path(path_value: str) -> Path:
+            candidate = Path(path_value).expanduser()
+
+            if candidate.is_absolute():
+                return candidate
+
+            cwd_candidate = (
+                Path.cwd() / candidate
+            ).resolve()
+            if cwd_candidate.is_file():
+                return cwd_candidate
+
+            return (
+                Path(__file__).resolve().parent
+                / candidate
+            ).resolve()
+
+        model_path = resolve_required_path(
+            self.config["paths"]["model_checkpoint"]
+        )
+        feature_path = resolve_required_path(
+            self.config["paths"]["feature_engineer"]
+        )
+        hardware_profile_path = resolve_required_path(
+            self.config["paths"]["hardware_profiles"]
+        )
+        if not model_path.is_file():
+            raise FileNotFoundError(
+                f"Keras model not found: {model_path}"
+            )
+
+        if not feature_path.is_file():
+            raise FileNotFoundError(
+                "Feature engineer not found: "
+                f"{feature_path}"
+            )
+        if not hardware_profile_path.is_file():
+            raise FileNotFoundError(
+                "Hardware profiles not found: "
+                f"{hardware_profile_path}"
+            )
+
+        self.hardware_profiles = pd.read_csv(
+            hardware_profile_path
+        )
+
+        required_profile_columns = {
+            "BS",
+            "CellName",
+            "RUType",
+            "Mode",
+            "Frequency",
+            "Bandwidth",
+            "Antennas",
+            "TXpower",
+        }
+
+        missing_profile_columns = (
+            required_profile_columns
+            - set(self.hardware_profiles.columns)
+        )
+
+        if missing_profile_columns:
+            raise ValueError(
+                "Hardware profile file is missing columns: "
+                f"{sorted(missing_profile_columns)}"
+            )
+
+        self.hardware_profiles = (
+            self.hardware_profiles[
+                self.hardware_profiles["CellName"].astype(str)
+                == "Cell0"
+            ]
+            .drop_duplicates(subset=["BS"])
+            .set_index("BS")
+        )
+
+        required_profile_ids = {
+            f"B_{index}"
+            for index in range(30)
+        }
+
+        missing_profile_ids = (
+            required_profile_ids
+            - set(self.hardware_profiles.index)
+        )
+
+        if missing_profile_ids:
+            raise ValueError(
+                "Missing hardware profiles for simulated gNBs: "
+                f"{sorted(missing_profile_ids)}"
+            )
         
-        if not os.path.exists(model_path) or not os.path.exists(feature_path):
-            self.logger.warning("Keras model not found. Please train using kerasTRAINER.py first")
-            raise FileNotFoundError(f"Model files not found: {model_path}, {feature_path}")
-        
+        self.config["paths"]["model_checkpoint"] = str(
+            model_path
+        )
+        self.config["paths"]["feature_engineer"] = str(
+            feature_path
+        )
+        self.config["paths"]["hardware_profiles"] = str(
+            hardware_profile_path
+        )
+
         # ZeroMQ setup
         self.context = zmq.asyncio.Context()
         self.request_socket = None
@@ -107,6 +227,9 @@ class PredictionAgent:
             'total_processing_time': 0,
             'errors': 0,
             'predictions_made': 0,
+            'batches_processed': 0,
+            'total_batch_processing_time': 0.0,
+            'stale_snapshots_dropped': 0,            
             'shap_batches_processed': 0,
             'start_time': time.time()
         }
@@ -191,7 +314,31 @@ class PredictionAgent:
         except Exception as e:
             self.logger.error(f"Failed to load Keras model: {e}")
             raise
-    
+    def get_model_hardware_profile(
+        self,
+        bs_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        try:
+            profile_number = int(str(bs_id)) - 1001
+        except (TypeError, ValueError):
+            return None
+
+        if profile_number < 0 or profile_number >= 30:
+            return None
+
+        profile_id = f"B_{profile_number}"
+        profile = self.hardware_profiles.loc[profile_id]
+
+        return {
+            "model_profile_id": profile_id,
+            "RUType": str(profile["RUType"]),
+            "Mode": str(profile["Mode"]),
+            "Frequency": float(profile["Frequency"]),
+            "Bandwidth": float(profile["Bandwidth"]),
+            "Antennas": int(profile["Antennas"]),
+            "TXpower": float(profile["TXpower"]),
+        }
+
     def prepare_dataframe(self, request: PredictionRequest) -> pd.DataFrame:
         """
         Convert request to DataFrame format expected by feature engineer
@@ -260,6 +407,9 @@ class PredictionAgent:
             'active_ues': 'num_users',
             'avg_sinr_db': 'sinr',
             'avg_rsrp_dbm': 'rsrp',
+
+            'mode': 'Mode',
+            'wall_time_utc': 'Time',
         }
         
         # Apply column name mapping
@@ -272,7 +422,23 @@ class PredictionAgent:
                 self.logger.debug(f"Mapped '{orig_key}' → '{mapped_key}' = {value}")
         
         data = mapped_data
-        
+        hardware_profile = (
+            self.get_model_hardware_profile(
+                request.bs_id
+            )
+        )
+
+        if hardware_profile is not None:
+            profile_id = hardware_profile.pop(
+                "model_profile_id"
+            )
+            data.update(hardware_profile)
+
+            self.logger.info(
+                "Using ITU hardware profile %s for gNB %s",
+                profile_id,
+                request.bs_id,
+            )        
         # ✅ SIMU5G SPECIFIC: Convert PRB percentage to decimal load
         if 'load' in data and data['load'] > 1.0:
             # PRB is sent as percentage (0-100), convert to decimal (0-1)
@@ -325,7 +491,6 @@ class PredictionAgent:
             'TXpower': 43.0,    # Default TX power (dBm) for macro cell
             'RUType': 'Type1',  # Default Radio Unit type (matches training data)
             'Mode': 'Mode1',    # Default duplex mode (matches training data)
-            'w': 1.0,           # Default weight
         }
         
         # Apply defaults only for missing keys
@@ -378,7 +543,7 @@ class PredictionAgent:
             feature_importance = {}
             
             # SHAP explanation (batched)
-            if self.use_shap and self.predictor.shap_explainer is not None:
+            if self.use_shap:
                 # Add to batch buffer
                 self.shap_batch_buffer.append(df)
                 
@@ -398,7 +563,13 @@ class PredictionAgent:
                         shap_result = self.predictor.explain_prediction(
                             df_batch, 
                             plot=True, 
-                            save_path=f"shap_batch_{batch_num}_{timestamp}.png",
+                            save_path=str(
+                                self.shap_output_dir
+                                / (
+                                    f"shap_batch_{batch_num}_"
+                                    f"{timestamp}.png"
+                                )
+                            ),
                             n_samples=len(df_batch)
                         )
                         
@@ -491,7 +662,171 @@ class PredictionAgent:
                 explanation=f"Prediction failed: {str(e)}",
                 processing_time_ms=(time.time() - start_time) * 1000
             )
-    
+    async def process_prediction_batch(
+        self,
+        requests: List[PredictionRequest],
+    ) -> List[PredictionResponse]:
+        """Predict all cells from one Simu5G snapshot in one Keras batch."""
+
+        if not requests:
+            return []
+
+        # Inline SHAP is intentionally incompatible with the real-time
+        # batching path. Paper SHAP is generated offline.
+        if self.use_shap:
+            self.logger.warning(
+                "Live SHAP disables batch acceleration; "
+                "processing requests individually"
+            )
+            return [
+                await self.process_prediction_request(request)
+                for request in requests
+            ]
+
+        start_time = time.time()
+
+        try:
+            dataframes = [
+                self.prepare_dataframe(request)
+                for request in requests
+            ]
+
+            batch_dataframe = pd.concat(
+                dataframes,
+                ignore_index=True,
+            )
+
+            self.recent_samples.extend(dataframes)
+            self.recent_samples = self.recent_samples[
+                -self.max_recent_samples:
+            ]
+
+            predictions, confidence = self.predictor.predict(
+                batch_dataframe,
+                return_confidence=True,
+            )
+
+            predictions = np.asarray(
+                predictions,
+                dtype=float,
+            ).reshape(-1)
+
+            if len(predictions) != len(requests):
+                raise ValueError(
+                    "Batch prediction count does not match "
+                    f"request count: {len(predictions)} != "
+                    f"{len(requests)}"
+                )
+
+            if confidence is None:
+                confidence_values = np.full(
+                    len(requests),
+                    np.nan,
+                    dtype=float,
+                )
+            else:
+                confidence_values = np.asarray(
+                    confidence,
+                    dtype=float,
+                ).reshape(-1)
+
+                if len(confidence_values) != len(requests):
+                    raise ValueError(
+                        "Batch confidence count does not match "
+                        f"request count: {len(confidence_values)} != "
+                        f"{len(requests)}"
+                    )
+
+            batch_time_ms = (
+                time.time() - start_time
+            ) * 1000.0
+
+            responses = []
+
+            for index, request in enumerate(requests):
+                prediction = float(predictions[index])
+                confidence_value = confidence_values[index]
+
+                if np.isfinite(confidence_value):
+                    confidence_score = float(confidence_value)
+                    explanation = (
+                        f"Predicted energy: {prediction:.2f}W "
+                        f"(confidence: "
+                        f"{confidence_score * 100.0:.1f}%)"
+                    )
+                else:
+                    confidence_score = None
+                    explanation = (
+                        f"Predicted energy: {prediction:.2f}W "
+                        "(confidence unavailable)"
+                    )
+
+                responses.append(
+                    PredictionResponse(
+                        request_id=request.request_id,
+                        timestamp=time.time(),
+                        bs_id=request.bs_id,
+                        predicted_energy=prediction,
+                        confidence_score=confidence_score,
+                        feature_importance={},
+                        explanation=explanation,
+                        processing_time_ms=batch_time_ms,
+                    )
+                )
+
+            request_count = len(requests)
+
+            self.metrics["requests_processed"] += request_count
+            self.metrics["predictions_made"] += request_count
+            self.metrics["batches_processed"] += 1
+            self.metrics[
+                "total_batch_processing_time"
+            ] += batch_time_ms
+
+            # Each cell waits for the complete batch result, so record
+            # batch latency for every response.
+            self.metrics["total_processing_time"] += (
+                batch_time_ms * request_count
+            )
+
+            self.logger.info(
+                "Batch prediction complete: %d cells in %.2f ms "
+                "(%.2f ms/cell effective compute)",
+                request_count,
+                batch_time_ms,
+                batch_time_ms / request_count,
+            )
+
+            return responses
+
+        except Exception as error:
+            self.logger.error(
+                "Batch prediction failed: %s",
+                error,
+                exc_info=True,
+            )
+            self.metrics["errors"] += len(requests)
+
+            elapsed_ms = (
+                time.time() - start_time
+            ) * 1000.0
+
+            return [
+                PredictionResponse(
+                    request_id=request.request_id,
+                    timestamp=time.time(),
+                    bs_id=request.bs_id,
+                    predicted_energy=-1.0,
+                    confidence_score=0.0,
+                    feature_importance={},
+                    explanation=(
+                        f"Batch prediction failed: {error}"
+                    ),
+                    processing_time_ms=elapsed_ms,
+                )
+                for request in requests
+            ]
+
     async def run(self):
         """Main agent execution loop - processes unseen Simu5G data"""
         self.logger.info("=" * 80)
@@ -521,57 +856,307 @@ class PredictionAgent:
                     # 1) Handle Simu5G metrics (UNSEEN DATA from simulation)
                     if self.metrics_sub in events:
                         frames = await self.metrics_sub.recv_multipart()
-                        
-                        # Parse message
+                        # Drain queued telemetry and retain only the
+                        # newest complete snapshot. Each snapshot still
+                        # contains every base station.
+                        stale_snapshots = 0
+
+                        while True:
+                            try:
+                                newer_frames = await (
+                                    self.metrics_sub.recv_multipart(
+                                        flags=zmq.NOBLOCK
+                                    )
+                                )
+                                frames = newer_frames
+                                stale_snapshots += 1
+                            except zmq.Again:
+                                break
+
+                        if stale_snapshots:
+                            self.metrics[
+                                "stale_snapshots_dropped"
+                            ] += stale_snapshots
+
+                            self.logger.warning(
+                                "Discarded %d stale telemetry "
+                                "snapshots; processing newest",
+                                stale_snapshots,
+                            )
+
+                        # Parse the newest snapshot.
                         if len(frames) == 1:
                             topic = ""
-                            payload = json.loads(frames[0].decode("utf-8"))
+                            payload = json.loads(
+                                frames[0].decode("utf-8")
+                            )
                         else:
                             topic = frames[0].decode("utf-8")
-                            payload = json.loads(frames[1].decode("utf-8"))
-                        
-                        cells = payload.get("cells", [])
-                        twin_id = payload.get("twin_id", "simu5g-twin")
-                        sim_time = payload.get("sim_time_s")
-                        
-                        self.logger.info(f"📥 Received data from Simu5G: {len(cells)} cells at sim_time={sim_time}")
-                        
-                        # Process each cell (UNSEEN DATA)
-                        for cell in cells:
-                            req = PredictionRequest(
-                                bs_id=str(
-                                    cell.get("bs_id") or 
-                                    cell.get("BS") or 
-                                    cell.get("cell_id") or 
-                                    "unknown"
-                                ),
-                                metrics=cell,  # ← UNSEEN DATA FROM SIMU5G
-                                config_params={},
-                                request_id=f"simu5g-{uuid.uuid4().hex[:8]}",
-                                timestamp=time.time()
+                            payload = json.loads(
+                                frames[1].decode("utf-8")
                             )
-                            
-                            # Make prediction on unseen data
-                            resp = await self.process_prediction_request(req)
-                            
-                            # Send prediction to optimization agent
+
+                        cells = payload.get("cells", [])
+                        twin_id = payload.get(
+                            "twin_id", "simu5g-twin"
+                        )
+                        sim_time = payload.get("sim_time_s")
+                        physical_sim_time = payload.get(
+                            "physical_sim_time_s"
+                        )
+                        kpi_source = payload.get(
+                            "kpi_source",
+                            "unknown",
+                        )
+                        energy_source = payload.get(
+                            "energy_source",
+                            "unknown",
+                        )
+
+                        self.logger.info(
+                            "Received latest Simu5G snapshot: "
+                            "%d cells at sim_time=%s",
+                            len(cells),
+                            sim_time,
+                        )
+
+                        requests = []
+
+                        for cell in cells:
+                            requests.append(
+                                PredictionRequest(
+                                    bs_id=str(
+                                        cell.get("bs_id")
+                                        or cell.get("BS")
+                                        or cell.get("cell_id")
+                                        or "unknown"
+                                    ),
+                                    metrics=cell,
+                                    config_params={},
+                                    request_id=(
+                                        "simu5g-"
+                                        f"{uuid.uuid4().hex[:8]}"
+                                    ),
+                                    timestamp=(
+                                        SIMULATION_EPOCH
+                                        + float(sim_time or 0.0)
+                                    ),
+                                )
+                            )
+
+                        responses = (
+                            await self.process_prediction_batch(
+                                requests
+                            )
+                        )
+
+                        if len(responses) != len(cells):
+                            raise RuntimeError(
+                                "Snapshot response count does not "
+                                f"match cell count: "
+                                f"{len(responses)} != {len(cells)}"
+                            )
+
+                        for cell, resp in zip(
+                            cells,
+                            responses,
+                        ):
                             resp_flat = asdict(resp)
+
+                            load = float(cell.get(
+                                "load",
+                                float(cell.get("prb_util_pct", 50.0)) / 100.0
+                            ))
+
+                            raw_es_modes = cell.get(
+                                "es_modes",
+                                [0, 0, 0, 0, 0, 0],
+                            )
+
+                            if not isinstance(
+                                raw_es_modes,
+                                (list, tuple),
+                            ):
+                                raw_es_modes = []
+
+                            es_modes = []
+
+                            for value in raw_es_modes[:6]:
+                                try:
+                                    es_modes.append(
+                                        1 if int(value) != 0 else 0
+                                    )
+                                except (TypeError, ValueError):
+                                    es_modes.append(0)
+
+                            es_modes.extend(
+                                [0] * (6 - len(es_modes))
+                            )
+
                             payload = {
                                 "request_id": resp_flat["request_id"],
                                 "bs_id": resp_flat["bs_id"],
                                 "predicted_energy": resp_flat["predicted_energy"],
-                                "confidence": resp_flat["confidence_score"],
+                                "confidence_score": resp_flat["confidence_score"],
                                 "twin_id": twin_id,
                                 "sim_time_s": sim_time,
+                                "physical_sim_time_s": physical_sim_time,
+                                "current_metrics": {
+                                    "load": load,
+                                    "prb_utilization": float(
+                                        cell.get(
+                                            "prb_util_pct",
+                                            load * 100.0,
+                                        )
+                                    ),
+                                    "available_prbs": int(
+                                        cell.get("available_prbs", 0)
+                                    ),
+                                    "used_prbs": float(
+                                        cell.get("used_prbs", 0.0)
+                                    ),
+                                    "throughput": float(
+                                        cell.get("dl_mbps", 0.0)
+                                    ),
+                                    "generated_dl_mbps": float(
+                                        cell.get(
+                                            "generated_dl_mbps",
+                                            0.0,
+                                        )
+                                    ),
+                                    "dl_mbps": float(
+                                        cell.get("dl_mbps", 0.0)
+                                    ),
+                                    "ul_mbps": float(
+                                        cell.get("ul_mbps", 0.0)
+                                    ),
+                                    "total_throughput_mbps": float(
+                                        cell.get(
+                                            "total_throughput_mbps",
+                                            0.0,
+                                        )
+                                    ),
+                                    "latency": float(
+                                        cell.get(
+                                            "avg_latency_ms",
+                                            0.0,
+                                        )
+                                    ),
+                                    "packet_loss": float(
+                                        cell.get(
+                                            "packet_loss_pct",
+                                            0.0,
+                                        )
+                                    ),
+                                    "sinr": float(
+                                        cell.get(
+                                            "avg_sinr_db",
+                                            0.0,
+                                        )
+                                    ),
+                                    "active_ues": int(
+                                        cell.get("active_ues", 0)
+                                    ),
+                                    "measured_energy_w": float(
+                                        cell.get(
+                                            "energy_consumption_w",
+                                            0.0,
+                                        )
+                                    ),
+                                    "interval_energy_j": float(
+                                        cell.get(
+                                            "interval_energy_j",
+                                            0.0,
+                                        )
+                                    ),
+                                    "represented_interval_s": float(
+                                        cell.get(
+                                            "represented_interval_s",
+                                            0.0,
+                                        )
+                                    ),
+                                    "represented_energy_j": float(
+                                        cell.get(
+                                            "represented_energy_j",
+                                            0.0,
+                                        )
+                                    ),
+                                    "energy_efficiency_mbit_per_j": float(
+                                        cell.get(
+                                            "energy_efficiency_mbit_per_j",
+                                            0.0,
+                                        )
+                                    ),
+                                    "measurement_interval_s": float(
+                                        cell.get(
+                                            "measurement_interval_s",
+                                            0.0,
+                                        )
+                                    ),
+                                },
+
+                                "current_config": {
+                                    "tx_power": float(cell.get("tx_power_dbm", 43.0)),
+                                    "bandwidth": int(cell.get("bandwidth_mhz", 20)),
+                                    "carrier_count": int(cell.get("carrier_count", 1)),
+                                    "es_mode": str(cell.get("es_mode", "active")),
+                                    "es_modes": es_modes,
+                                    "physical_tx_power": float(
+                                        cell.get(
+                                            "physical_tx_power_dbm",
+                                            cell.get(
+                                                "tx_power_dbm",
+                                                43.0,
+                                            ),
+                                        )
+                                    ),
+                                    "radio_sleeping": bool(
+                                        cell.get(
+                                            "radio_sleeping",
+                                            False,
+                                        )
+                                    ),
+                                    "requested_bandwidth": float(
+                                        cell.get(
+                                            "requested_bandwidth_mhz",
+                                            cell.get(
+                                                "bandwidth_mhz",
+                                                20.0,
+                                            ),
+                                        )
+                                    ),
+                                    "requested_carrier_count": int(
+                                        cell.get(
+                                            "requested_carrier_count",
+                                            cell.get(
+                                                "carrier_count",
+                                                1,
+                                            ),
+                                        )
+                                    ),
+                                },
+
+                                "cell_metadata": {
+                                    "zone": cell.get("zone"),
+                                    "zone_name": cell.get("zone_name"),
+                                    "bs_type": cell.get("bs_type"),
+                                    "ru_type": cell.get("ru_type"),
+                                    "mode": cell.get("mode"),
+                                    "frequency_mhz": cell.get("frequency_mhz"),
+                                    "num_antennas": cell.get("num_antennas"),
+                                    "traffic_level": cell.get("traffic_level"),
+                                    "kpi_source": kpi_source,
+                                    "energy_source": energy_source,
+                                },
                             }
-                            
+
                             enveloped = {
                                 "type": "prediction",
                                 "timestamp": resp_flat["timestamp"],
                                 "processing_time_ms": resp_flat["processing_time_ms"],
                                 "payload": payload,
                             }
-                            
+
                             await self.response_socket.send_json(enveloped)
                             self.logger.debug(f"📤 Sent prediction to optimization agent")
                     
@@ -632,6 +1217,27 @@ class PredictionAgent:
             self.logger.info(f"  - Uptime: {uptime:.2f}s")
             self.logger.info(f"  - Requests processed: {self.metrics['requests_processed']}")
             self.logger.info(f"  - Predictions made: {self.metrics['predictions_made']}")
+            self.logger.info(
+                "  - Batches processed: "
+                f"{self.metrics['batches_processed']}"
+            )
+            self.logger.info(
+                "  - Stale snapshots discarded: "
+                f"{self.metrics['stale_snapshots_dropped']}"
+            )
+
+            average_batch_time = (
+                self.metrics["total_batch_processing_time"]
+                / max(
+                    1,
+                    self.metrics["batches_processed"],
+                )
+            )
+
+            self.logger.info(
+                f"  - Average batch time: "
+                f"{average_batch_time:.2f}ms"
+            )            
             self.logger.info(f"  - SHAP batches generated: {self.metrics['shap_batches_processed']}")
             self.logger.info(f"  - Errors: {self.metrics['errors']}")
             avg_time = self.metrics['total_processing_time']/max(1, self.metrics['requests_processed'])
