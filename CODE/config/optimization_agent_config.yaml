@@ -7,11 +7,29 @@ agent:
   version: "2.0"
   description: "Advanced optimization agent with NSGA-II, 3GPP policy parsing, and LLM integration"
 
+experiment:
+  # Valid values: "rule_based" or "ai_based"
+  mode: "rule_based"
+
+  # Make one control decision per BS every 15 simulated minutes.
+  decision_interval_sim_seconds: 900
+
+  # Ignore insignificant load fluctuations.
+  minimum_load_change: 0.05
+
+  # Do not deploy configurations whose predicted energy benefit
+  # is negligible or negative.
+  minimum_energy_saving_percent: 0.5
+
 # Optimization Algorithm Configuration
 optimization:
   default_method: "genetic_algorithm"  # Uses NSGA-II for multi-objective optimization
-  population_size: 100                 # Population size for genetic algorithm
-  generations: 150                     # Number of generations to evolve
+
+  # 225 evaluations per cell. The search space contains one
+  # continuous TX-power variable and seven discrete ES states.
+  # This budget keeps 30-cell decisions within the control window.
+  population_size: 15
+  generations: 15
   
   # Base QoS Constraints (can be dynamically updated by 3GPP policies)
   constraints:
@@ -23,8 +41,8 @@ optimization:
   # Optimization bounds for 5G parameters
   bounds:
     tx_power_range: [5.0, 43.0]       # TX power range in dBm
-    bandwidth_options: [5, 10, 15, 20, 25, 40, 50, 100]  # Available bandwidth in MHz
-    carrier_count_range: [1, 4]       # Carrier aggregation range
+    bandwidth_options: [20]           # Physical topology currently uses one 20 MHz carrier
+    carrier_count_range: [1]          # Prevent proposals that Simu5G cannot physically apply
     energy_saving_modes: 6            # Number of energy saving modes
 
 # 3GPP Policy Integration Configuration
@@ -51,9 +69,11 @@ policy_integration:
 # LLM Template Generation Configuration
 llm:
   type: "openai"                      # Options: "openai", "huggingface", "local"
-  model: "gpt-3.5-turbo"              # Model to use for LLM generation
-  max_tokens: 2000                    # Maximum tokens in LLM response
-  temperature: 0.3                    # Temperature for response generation
+  model: "gpt-5-mini-2025-08-07"      # Model to use for LLM generation
+  max_output_tokens: 1500                    # Maximum tokens in LLM response
+  execution_insights_enabled: false
+  healing_enabled: true
+  max_healing_calls_per_run: 3
   
   # Alternative: Hugging Face Configuration
   # model_name: "microsoft/DialoGPT-medium"
@@ -71,7 +91,10 @@ orchestrator:
   enabled: true                       # Enable/disable orchestrator integration
   orchestrator_host: "localhost"      # Orchestrator host address
   orchestrator_port: 5563             # Orchestrator ZeroMQ port
-  auto_execute: true                  # Automatically execute optimized configurations
+  #auto_execute: true                  # Automatically execute optimized configurations
+  # AI configurations must be validated before execution.
+  # Rule-based execution will be handled explicitly by the agent.
+  auto_execute: false
   execution_timeout: 300              # Timeout for execution in seconds
   retry_attempts: 3                   # Number of retry attempts for failed executions
   
@@ -91,18 +114,30 @@ orchestrator:
 
 # ZeroMQ Communication Configuration
 communication:
-  prediction_agent_port: 5556         # Port for receiving predictions
-  request_port: 5558                  # Port for receiving optimization requests      
-  pub_port: 5557
-  feedback_host: 'localhost'
-  feedback_agent_port: 5559
-  prediction_host: 'localhost'
-  prediction_pull_port: 5557
-  # Socket Configuration
-  socket_timeout_ms: 5000             # Socket timeout in milliseconds
-  max_retry_attempts: 3               # Maximum retry attempts for socket operations
-  heartbeat_interval_seconds: 30      # Heartbeat interval for connection monitoring
-  feedback_reply_port: 5560          # Port to receive validation replies from Feedback Agent
+  # PredictionAgent direct request/reply port
+  prediction_agent_port: 5555
+  prediction_host: "localhost"
+
+  # PredictionAgent PUSH -> OptimizationAgent PULL
+  prediction_port: 5558
+
+  # FeedbackAgent PUSH -> OptimizationAgent PULL
+  response_port: 5559
+
+  # OptimizationAgent PUSH -> FeedbackAgent PULL
+  feedback_host: "localhost"
+  feedback_agent_port: 5560
+
+  # Optional direct optimization-request port
+  request_port: 5565
+
+  # OptimizationAgent status/events publisher
+  pub_port: 5564
+
+  socket_timeout_ms: 5000
+  max_retry_attempts: 3
+  heartbeat_interval_seconds: 30
+
 # Logging Configuration
 logging:
   level: "INFO"                       # Logging level: DEBUG, INFO, WARNING, ERROR
