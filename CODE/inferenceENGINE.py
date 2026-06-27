@@ -3,32 +3,42 @@ Keras Inference Engine for Energy Prediction with SHAP Explainability
 Load trained model and make predictions on new data
 """
 
+import json
+import logging
+import pickle
+import warnings
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+import matplotlib
+
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import pickle
-from pathlib import Path
-from typing import Dict, Tuple, Optional, List, Any
-import logging
-import warnings
-import json
-import matplotlib.pyplot as plt
-
+import shap
 import tensorflow as tf
 from tensorflow import keras
-
-# SHAP for explainability
-import shap
-import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use('Agg')  # Non-interactive backend for saving plots
 
 from kerasDataUTILS import prepare_keras_inputs
 from kerasModelARCH import Swish
 
-warnings.filterwarnings('ignore')
+warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+@keras.utils.register_keras_serializable(
+    package="AutoEASORAN"
+)
+class MonteCarloDropout(keras.layers.Dropout):
+    """Dropout active at inference without training BatchNorm."""
+
+    def call(self, inputs, training=None):
+        return super().call(
+            inputs,
+            training=True,
+        )
 
 class KerasEnergyPredictor:
     """
@@ -49,9 +59,36 @@ class KerasEnergyPredictor:
             feature_engineer_path: Path to pickled feature engineer
             enable_shap: Whether to enable SHAP explainability
         """
-        self.model_path = Path(model_path)
-        self.feature_engineer_path = Path(feature_engineer_path)
+        self.module_dir = Path(__file__).resolve().parent
+
+        def resolve_artifact_path(path: str) -> Path:
+            candidate = Path(path).expanduser()
+
+            if candidate.is_absolute():
+                return candidate
+
+            cwd_candidate = (Path.cwd() / candidate).resolve()
+            if cwd_candidate.exists():
+                return cwd_candidate
+
+            return (self.module_dir / candidate).resolve()
+
+        self.model_path = resolve_artifact_path(model_path)
+        self.feature_engineer_path = resolve_artifact_path(
+            feature_engineer_path
+        )
         self.enable_shap = enable_shap
+
+        if not self.model_path.is_file():
+            raise FileNotFoundError(
+                f"Keras model not found: {self.model_path}"
+            )
+
+        if not self.feature_engineer_path.is_file():
+            raise FileNotFoundError(
+                "Feature engineer not found: "
+                f"{self.feature_engineer_path}"
+            )
         
         logger.info("=" * 80)
         logger.info("INITIALIZING KERAS ENERGY PREDICTOR")
@@ -61,6 +98,24 @@ class KerasEnergyPredictor:
         logger.info(f"Loading model from: {self.model_path}")
         custom_objects = {'Swish': Swish}
         self.model = keras.models.load_model(self.model_path, custom_objects=custom_objects)
+        def clone_for_mc_dropout(layer):
+            if isinstance(layer, keras.layers.Dropout):
+                return MonteCarloDropout.from_config(
+                    layer.get_config()
+                )
+
+            return layer.__class__.from_config(
+                layer.get_config()
+            )
+
+        self.mc_model = keras.models.clone_model(
+            self.model,
+            clone_function=clone_for_mc_dropout,
+        )
+        self.mc_model.set_weights(
+            self.model.get_weights()
+        )
+        self.mc_model.trainable = False
         logger.info(f"✓ Model loaded: {self.model.count_params():,} parameters")
         
         # Load feature engineer
@@ -74,6 +129,9 @@ class KerasEnergyPredictor:
         # SHAP components
         self.shap_explainer = None
         self.background_data = None
+        self.shap_feature_names: List[str] = []
+        self.shap_categorical_names: List[str] = []
+        self.shap_continuous_count = 0
         
         if self.enable_shap:
             logger.info("SHAP explainability: ENABLED (will initialize on first use)")
@@ -129,10 +187,14 @@ class KerasEnergyPredictor:
             # Store predictions from each forward pass
             mc_predictions = []
             
-            for i in range(n_iterations):
-                # Make prediction with dropout enabled (training=True)
-                mc_pred = self.model(keras_inputs, training=True)
-                mc_predictions.append(mc_pred.numpy().flatten())
+            for _ in range(n_iterations):
+                mc_pred = self.mc_model(
+                    keras_inputs,
+                    training=False,
+                )
+                mc_predictions.append(
+                    mc_pred.numpy().flatten()
+                )
             
             # Stack predictions: shape (n_iterations, n_samples)
             mc_predictions = np.array(mc_predictions)
@@ -291,86 +353,221 @@ class KerasEnergyPredictor:
         return metrics
     
     # ==================== SHAP EXPLAINABILITY METHODS ====================
-    
-    # Replace the initialize_shap method (around line 250):
-
-    # Replace the initialize_shap method (around line 250):
-
-    # Replace the initialize_shap method:
-
     def initialize_shap(
-        self, 
+        self,
         background_samples: int = 100,
-        background_data_path: str = "../archive/merged_training_data.csv"
+        background_data_path: str = (
+            "../archive/merged_training_data.csv"
+        ),
     ):
         """
-        Initialize SHAP explainer with background dataset
-        
-        Args:
-            background_samples: Number of samples for SHAP background
-            background_data_path: Path to training data for background
+        Initialize SHAP using every ANN input, including categorical
+        embedding inputs.
         """
         if self.shap_explainer is not None:
             logger.info("SHAP explainer already initialized")
             return
-        
+
+        background_path = Path(
+            background_data_path
+        ).expanduser()
+
+        if not background_path.is_absolute():
+            cwd_path = (
+                Path.cwd() / background_path
+            ).resolve()
+            module_path = (
+                self.module_dir / background_path
+            ).resolve()
+
+            if cwd_path.is_file():
+                background_path = cwd_path
+            else:
+                background_path = module_path
+
+        if not background_path.is_file():
+            raise FileNotFoundError(
+                "SHAP background data not found: "
+                f"{background_path}"
+            )
+
+        sample_count = max(1, int(background_samples))
+
         logger.info("=" * 80)
         logger.info("INITIALIZING SHAP EXPLAINER")
         logger.info("=" * 80)
-        logger.info(f"Loading {background_samples} background samples from: {background_data_path}")
-        
-        try:
-            # Load background data
-            train_data = pd.read_csv(background_data_path, nrows=background_samples)
-            X_continuous_bg, X_categorical_bg = self.feature_engineer.transform(train_data)
-            
-            # Store background data (continuous features only for SHAP)
-            self.background_data = {
-                'continuous': X_continuous_bg,
-                'categorical': X_categorical_bg,
-            }
-            
-            logger.info(f"Background data shape: {X_continuous_bg.shape}")
-            logger.info(f"Using KernelExplainer (model-agnostic, works with any model)")
-            
-            # Create a prediction function that wraps the model
-            def model_predict(X_cont):
-                """Wrapper function for SHAP that takes only continuous features"""
-                # Use mean values for categorical features from background
-                batch_size = X_cont.shape[0]
-                
-                # Create dummy categorical features (use mode from background)
-                X_cat_dummy = {}
-                for cat_feat, cat_values in X_categorical_bg.items():
-                    # Use the most common value
-                    mode_val = np.bincount(cat_values).argmax()
-                    X_cat_dummy[cat_feat] = np.full(batch_size, mode_val, dtype=np.int32)
-                
-                # Prepare keras inputs
-                keras_inputs = prepare_keras_inputs(X_cont, X_cat_dummy)
-                
-                # Predict
-                preds = self.model.predict(keras_inputs, verbose=0)
-                return preds.flatten()
-            
-            # Create SHAP KernelExplainer
-            # Use a subset of background for speed
-            bg_subset = X_continuous_bg[:min(50, len(X_continuous_bg))]
-            
-            self.shap_explainer = shap.KernelExplainer(
-                model_predict,
-                bg_subset
+        logger.info(
+            "Loading %d background samples from %s",
+            sample_count,
+            background_path,
+        )
+
+        train_data = pd.read_csv(
+            background_path,
+            nrows=sample_count,
+        )
+
+        if train_data.empty:
+            raise ValueError(
+                "SHAP background dataset contains no rows"
             )
-            
-            logger.info("✓ SHAP explainer initialized successfully")
-            logger.info("=" * 80)
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize SHAP explainer: {e}")
-            import traceback
-            traceback.print_exc()
-            self.shap_explainer = None
-            raise
+
+        (
+            continuous_background,
+            categorical_background,
+        ) = self.feature_engineer.transform(train_data)
+
+        model_input_names = {
+            tensor.name.split(":")[0]
+            for tensor in self.model.inputs
+        }
+
+        expected_categorical = (
+            model_input_names - {"continuous"}
+        )
+
+        self.shap_categorical_names = [
+            name
+            for name in self.feature_engineer.categorical_features
+            if name in expected_categorical
+        ]
+
+        missing_categorical = (
+            expected_categorical
+            - set(self.shap_categorical_names)
+        )
+        if missing_categorical:
+            raise ValueError(
+                "Feature engineer does not provide model inputs: "
+                f"{sorted(missing_categorical)}"
+            )
+
+        missing_background = [
+            name
+            for name in self.shap_categorical_names
+            if name not in categorical_background
+        ]
+        if missing_background:
+            raise ValueError(
+                "SHAP background data is missing categorical "
+                f"inputs: {missing_background}"
+            )
+
+        self.shap_continuous_count = (
+            continuous_background.shape[1]
+        )
+        self.shap_feature_names = list(
+            self.feature_engineer.continuous_feature_names
+        ) + self.shap_categorical_names
+
+        flat_parts = [
+            np.asarray(
+                continuous_background,
+                dtype=np.float64,
+            )
+        ]
+
+        for name in self.shap_categorical_names:
+            flat_parts.append(
+                np.asarray(
+                    categorical_background[name],
+                    dtype=np.float64,
+                ).reshape(-1, 1)
+            )
+
+        flat_background = np.concatenate(
+            flat_parts,
+            axis=1,
+        )
+
+        if (
+            flat_background.shape[1]
+            != len(self.shap_feature_names)
+        ):
+            raise ValueError(
+                "SHAP feature-name count does not match "
+                "the flattened model inputs"
+            )
+
+        self.background_data = flat_background
+
+        categorical_limits = {}
+        for name in self.shap_categorical_names:
+            embedding_layer = self.model.get_layer(
+                f"{name}_embedding"
+            )
+            categorical_limits[name] = int(
+                embedding_layer.input_dim
+            )
+
+        def model_predict(
+            flattened_inputs: np.ndarray,
+        ) -> np.ndarray:
+            flattened_inputs = np.atleast_2d(
+                np.asarray(
+                    flattened_inputs,
+                    dtype=np.float64,
+                )
+            )
+
+            continuous_inputs = flattened_inputs[
+                :,
+                :self.shap_continuous_count,
+            ].astype(np.float32)
+
+            categorical_inputs = {}
+            for offset, name in enumerate(
+                self.shap_categorical_names
+            ):
+                column_index = (
+                    self.shap_continuous_count + offset
+                )
+                encoded_values = np.rint(
+                    flattened_inputs[:, column_index]
+                ).astype(np.int32)
+
+                categorical_inputs[name] = np.clip(
+                    encoded_values,
+                    0,
+                    categorical_limits[name] - 1,
+                )
+
+            keras_inputs = prepare_keras_inputs(
+                continuous_inputs,
+                categorical_inputs,
+            )
+
+            return self.model.predict(
+                keras_inputs,
+                verbose=0,
+            ).reshape(-1)
+
+        subset_size = min(
+            50,
+            len(flat_background),
+        )
+        subset_indices = np.linspace(
+            0,
+            len(flat_background) - 1,
+            num=subset_size,
+            dtype=int,
+        )
+        background_subset = flat_background[
+            subset_indices
+        ]
+
+        self.shap_explainer = shap.KernelExplainer(
+            model_predict,
+            background_subset,
+        )
+
+        logger.info(
+            "SHAP initialized with %d continuous and %d "
+            "categorical features",
+            self.shap_continuous_count,
+            len(self.shap_categorical_names),
+        )
+        logger.info("=" * 80)
 
     def explain_prediction(
         self,
@@ -378,145 +575,215 @@ class KerasEnergyPredictor:
         sample_idx: int = 0,
         plot: bool = True,
         save_path: Optional[str] = None,
-        n_samples: int = 3
+        n_samples: int = 3,
     ) -> Dict[str, Any]:
         """
-        Explain predictions using SHAP values
-        
-        Args:
-            df: Input data
-            sample_idx: Index of sample to explain in detail
-            plot: Whether to generate plots
-            save_path: Path to save plots (default: shap_explanation.png)
-            n_samples: Number of samples to explain (KernelExplainer is slow, use small number)
-        
-        Returns:
-            Dictionary with SHAP values, feature names, and explanations
+        Explain predictions using every continuous and categorical
+        input consumed by the Keras ANN.
         """
         if not self.enable_shap:
-            logger.warning("SHAP is disabled. Enable with enable_shap=True")
+            logger.warning(
+                "SHAP is disabled. Enable with enable_shap=True"
+            )
             return {}
-        
+
         if self.shap_explainer is None:
-            logger.info("SHAP explainer not initialized, initializing now...")
+            logger.info(
+                "SHAP explainer not initialized; initializing now"
+            )
             self.initialize_shap()
-        
-        # Limit samples for KernelExplainer (it's slow)
-        df_subset = df.head(n_samples)
-        
+
+        sample_count = max(1, int(n_samples))
+        df_subset = df.head(sample_count).copy()
+
+        if df_subset.empty:
+            raise ValueError(
+                "No samples were provided for SHAP explanation"
+            )
+
+        if sample_idx < 0 or sample_idx >= len(df_subset):
+            raise IndexError(
+                f"sample_idx={sample_idx} is outside the "
+                f"{len(df_subset)}-sample SHAP batch"
+            )
+
+        (
+            continuous_inputs,
+            categorical_inputs,
+        ) = self.feature_engineer.transform(df_subset)
+
+        missing_categorical = [
+            name
+            for name in self.shap_categorical_names
+            if name not in categorical_inputs
+        ]
+        if missing_categorical:
+            raise ValueError(
+                "Input data is missing categorical model inputs: "
+                f"{missing_categorical}"
+            )
+
+        flat_parts = [
+            np.asarray(
+                continuous_inputs,
+                dtype=np.float64,
+            )
+        ]
+
+        for name in self.shap_categorical_names:
+            flat_parts.append(
+                np.asarray(
+                    categorical_inputs[name],
+                    dtype=np.float64,
+                ).reshape(-1, 1)
+            )
+
+        flattened_inputs = np.concatenate(
+            flat_parts,
+            axis=1,
+        )
+        feature_names = list(self.shap_feature_names)
+
+        if (
+            flattened_inputs.shape[1]
+            != len(feature_names)
+        ):
+            raise ValueError(
+                "Flattened SHAP input width does not match "
+                "the recorded feature names"
+            )
+
         logger.info("=" * 80)
-        logger.info(f"EXPLAINING PREDICTIONS FOR {len(df_subset)} SAMPLES")
-        logger.info(f"(KernelExplainer is slow, using subset for speed)")
+        logger.info(
+            "EXPLAINING %d PREDICTIONS WITH %d FEATURES",
+            len(df_subset),
+            len(feature_names),
+        )
         logger.info("=" * 80)
-        
-        # Transform data
-        X_continuous, X_categorical = self.feature_engineer.transform(df_subset)
-        
-        # Get feature names (continuous only)
-        feature_names = self.feature_engineer.continuous_feature_names.copy()
-        
-        # Calculate SHAP values (this will be slow)
-        logger.info("Calculating SHAP values (this may take several minutes)...")
-        logger.info(f"Progress: Processing {len(X_continuous)} samples...")
-        
+
         try:
             shap_values = self.shap_explainer.shap_values(
-                X_continuous,
-                nsamples='auto',  # Adaptive sampling
-                l1_reg='aic'      # Automatic regularization
+                flattened_inputs,
+                nsamples="auto",
+                l1_reg="aic",
             )
-            
-            # Handle output format
-            if isinstance(shap_values, list):
-                shap_values_array = shap_values[0]
-            else:
-                shap_values_array = shap_values
-            
-        except Exception as e:
-            logger.error(f"SHAP calculation failed: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
+            logger.exception("SHAP calculation failed")
             return {}
-        
-        # Ensure shapes match
-        if shap_values_array.shape[1] != len(feature_names):
-            logger.warning(f"Shape mismatch: SHAP values have {shap_values_array.shape[1]} features, "
-                          f"but we have {len(feature_names)} feature names. Using first {shap_values_array.shape[1]} names.")
-            feature_names = feature_names[:shap_values_array.shape[1]]
-        
-        # Calculate feature importance (mean absolute SHAP)
-        mean_abs_shap = np.abs(shap_values_array).mean(axis=0)
-        
-        # Create importance DataFrame
-        importance_df = pd.DataFrame({
-            'feature': feature_names,
-            'importance': mean_abs_shap
-        }).sort_values('importance', ascending=False)
-        
-        logger.info("\n📊 TOP 10 MOST IMPORTANT FEATURES:")
-        logger.info(importance_df.head(10).to_string(index=False))
-        
-        # Get predictions
-        keras_inputs = prepare_keras_inputs(X_continuous, X_categorical)
-        predictions = self.model.predict(keras_inputs, verbose=0).flatten()
-        
-        # Detailed explanation for specific sample
+
+        if isinstance(shap_values, list):
+            shap_values_array = np.asarray(
+                shap_values[0],
+                dtype=np.float64,
+            )
+        else:
+            shap_values_array = np.asarray(
+                shap_values,
+                dtype=np.float64,
+            )
+
+        if (
+            shap_values_array.ndim == 3
+            and shap_values_array.shape[-1] == 1
+        ):
+            shap_values_array = np.squeeze(
+                shap_values_array,
+                axis=-1,
+            )
+
+        if shap_values_array.ndim == 1:
+            shap_values_array = shap_values_array.reshape(
+                1,
+                -1,
+            )
+
+        expected_shape = flattened_inputs.shape
+        if shap_values_array.shape != expected_shape:
+            raise ValueError(
+                "Unexpected SHAP output shape: "
+                f"{shap_values_array.shape}; "
+                f"expected {expected_shape}"
+            )
+
+        mean_absolute_shap = np.abs(
+            shap_values_array
+        ).mean(axis=0)
+
+        importance_df = pd.DataFrame(
+            {
+                "feature": feature_names,
+                "importance": mean_absolute_shap,
+            }
+        ).sort_values(
+            "importance",
+            ascending=False,
+            ignore_index=True,
+        )
+
+        keras_inputs = prepare_keras_inputs(
+            continuous_inputs,
+            categorical_inputs,
+        )
+        predictions = self.model.predict(
+            keras_inputs,
+            verbose=0,
+        ).reshape(-1)
+
         sample_explanation = self._explain_single_sample(
             shap_values_array[sample_idx],
-            X_continuous[sample_idx],
+            flattened_inputs[sample_idx],
             feature_names,
-            predictions[sample_idx]
+            float(predictions[sample_idx]),
         )
-        
-        logger.info(f"\n📋 DETAILED EXPLANATION FOR SAMPLE {sample_idx}:")
-        logger.info(f"   Predicted Energy: {predictions[sample_idx]:.2f}W")
-        
-        # Get base value
-        try:
-            base_val = float(self.shap_explainer.expected_value)
-            logger.info(f"   Base Value: {base_val:.2f}W")
-        except:
-            base_val = predictions.mean()
-            logger.info(f"   Base Value (estimated): {base_val:.2f}W")
-        
-        logger.info(f"   Top positive contributors:")
-        for feat, val in sample_explanation['top_positive'][:5]:
-            logger.info(f"      + {feat}: {val:+.3f}")
-        logger.info(f"   Top negative contributors:")
-        for feat, val in sample_explanation['top_negative'][:5]:
-            logger.info(f"      - {feat}: {val:+.3f}")
-        
-        # Generate plots
+
+        expected_value = np.asarray(
+            self.shap_explainer.expected_value,
+            dtype=np.float64,
+        ).reshape(-1)
+
+        if expected_value.size:
+            base_value = float(expected_value[0])
+        else:
+            base_value = float(predictions.mean())
+
+        logger.info(
+            "Sample %d predicted energy: %.2f W",
+            sample_idx,
+            predictions[sample_idx],
+        )
+        logger.info("SHAP base value: %.2f W", base_value)
+        logger.info(
+            "Top SHAP features:\n%s",
+            importance_df.head(10).to_string(index=False),
+        )
+
         if plot:
-            plot_path = save_path or 'shap_explanation.png'
+            plot_path = (
+                save_path or "shap_explanation.png"
+            )
             self._plot_shap_explanation(
-                shap_values_array, 
-                X_continuous, 
+                shap_values_array,
+                flattened_inputs,
                 feature_names,
                 predictions,
                 sample_idx,
-                plot_path
+                plot_path,
             )
-        
-        # Compile result
-        result = {
-            'shap_values': shap_values_array,
-            'feature_names': feature_names,
-            'feature_importance': importance_df,
-            'base_value': base_val,
-            'predictions': predictions,
-            'sample_explanation': sample_explanation
+
+        return {
+            "shap_values": shap_values_array,
+            "feature_names": feature_names,
+            "feature_importance": importance_df,
+            "base_value": base_value,
+            "predictions": predictions,
+            "sample_explanation": sample_explanation,
+            "continuous_feature_count": (
+                self.shap_continuous_count
+            ),
+            "categorical_features": list(
+                self.shap_categorical_names
+            ),
         }
-        
-        logger.info("=" * 80)
-        logger.info("✓ SHAP EXPLANATION COMPLETE")
-        logger.info("=" * 80)
-        
-        return result
-    
-    # Keep _explain_single_sample as is
-    
-    # Add this method after the explain_prediction method (around line 440):
 
     def _explain_single_sample(
         self,
@@ -577,9 +844,27 @@ class KerasEnergyPredictor:
             base_val = predictions.mean()
         
         # Directory for saving plots
-        save_dir = Path(save_path).parent
-        save_stem = Path(save_path).stem
-        
+        resolved_save_path = Path(save_path).expanduser()
+
+        if not resolved_save_path.is_absolute():
+            resolved_save_path = (
+                Path.cwd() / resolved_save_path
+            ).resolve()
+
+        save_dir = resolved_save_path.parent
+        save_dir.mkdir(parents=True, exist_ok=True)
+        save_stem = resolved_save_path.stem
+        categorical_names = set(
+            self.shap_categorical_names
+        )
+        display_feature_names = [
+            (
+                f"{name} (categorical code)"
+                if name in categorical_names
+                else name
+            )
+            for name in feature_names
+        ]        
         # ============================================================
         # PLOT 1: Feature Importance Bar Chart (Enhanced)
         # ============================================================
@@ -588,7 +873,7 @@ class KerasEnergyPredictor:
         # Calculate mean absolute SHAP values
         mean_abs_shap = np.abs(shap_values).mean(axis=0)
         importance_df = pd.DataFrame({
-            'feature': feature_names,
+            'feature': display_feature_names,
             'importance': mean_abs_shap
         }).sort_values('importance', ascending=True).tail(20)  # Top 20
         
@@ -627,7 +912,7 @@ class KerasEnergyPredictor:
         shap.summary_plot(
             shap_values, 
             X, 
-            feature_names=feature_names,
+            feature_names=display_feature_names,
             max_display=20,
             show=False,
             cmap='coolwarm',
@@ -635,7 +920,7 @@ class KerasEnergyPredictor:
         )
         
         ax.set_title('Feature Impact Distribution (Beeswarm Plot)\n'
-                    'Color: Feature Value (Red=High, Blue=Low)', 
+                    'Color: Transformed Value (Categorical Codes Are Non-Ordinal)', 
                     fontsize=16, fontweight='bold', pad=20)
         ax.set_xlabel('SHAP Value (Impact on Model Output)', fontsize=13, fontweight='bold')
         ax.grid(True, alpha=0.2, axis='x', linestyle='--')
@@ -658,7 +943,7 @@ class KerasEnergyPredictor:
                     values=shap_values[sample_idx],
                     base_values=base_val,
                     data=X[sample_idx],
-                    feature_names=feature_names
+                    feature_names=display_feature_names
                 ),
                 max_display=20,
                 show=False
@@ -673,7 +958,10 @@ class KerasEnergyPredictor:
             top_n = 20
             top_features_idx = np.argsort(np.abs(shap_values[sample_idx]))[-top_n:][::-1]
             values = shap_values[sample_idx][top_features_idx]
-            names = [feature_names[i] for i in top_features_idx]
+            names = [
+                display_feature_names[i]
+                for i in top_features_idx
+            ]
             
             colors_bar = ['#d62728' if v < 0 else '#2ca02c' for v in values]
             bars = ax.barh(names, values, color=colors_bar, alpha=0.8, edgecolor='black', linewidth=1.2)
@@ -713,7 +1001,10 @@ class KerasEnergyPredictor:
         
         # Negative contributors (left panel)
         neg_values = shap_values[sample_idx][top_negative]
-        neg_names = [feature_names[i] for i in top_negative]
+        neg_names = [
+            display_feature_names[i]
+            for i in top_negative
+        ]
         
         bars1 = ax1.barh(neg_names, neg_values, color='#d62728', alpha=0.8, 
                          edgecolor='darkred', linewidth=1.5)
@@ -733,7 +1024,10 @@ class KerasEnergyPredictor:
         
         # Positive contributors (right panel)
         pos_values = shap_values[sample_idx][top_positive]
-        pos_names = [feature_names[i] for i in top_positive]
+        pos_names = [
+            display_feature_names[i]
+            for i in top_positive
+        ]
         
         bars2 = ax2.barh(pos_names, pos_values, color='#2ca02c', alpha=0.8, 
                          edgecolor='darkgreen', linewidth=1.5)
@@ -770,7 +1064,10 @@ class KerasEnergyPredictor:
             # Select top 15 features by importance
             top_features_idx = np.argsort(np.abs(shap_values).mean(axis=0))[-15:][::-1]
             shap_subset = shap_values[:, top_features_idx]
-            feature_subset = [feature_names[i] for i in top_features_idx]
+            feature_subset = [
+                display_feature_names[i]
+                for i in top_features_idx
+            ]
             
             im = ax.imshow(shap_subset.T, cmap='RdBu_r', aspect='auto', 
                           vmin=-np.abs(shap_subset).max(), 
@@ -803,43 +1100,138 @@ class KerasEnergyPredictor:
     
     def get_feature_importance(
         self,
-        n_samples: int = 3,  # Reduced from 1000
-        save_json: bool = True
+        n_samples: int = 20,
+        save_json: bool = True,
+        data_path: str = (
+            "../archive/merged_training_data.csv"
+        ),
+        output_path: str = (
+            "shap_outputs/feature_importance.json"
+        ),
     ) -> pd.DataFrame:
         """
-        Get global feature importance based on SHAP values
-        
-        Args:
-            n_samples: Number of samples to use (KernelExplainer is slow, use small number)
-            save_json: Whether to save importance to JSON file
-        
-        Returns:
-            DataFrame with feature names and importance scores
+        Calculate global SHAP importance from a reproducible
+        sample of the supplied dataset.
         """
         if not self.enable_shap:
-            logger.warning("SHAP is disabled. Enable with enable_shap=True")
+            logger.warning(
+                "SHAP is disabled. Enable with enable_shap=True"
+            )
             return pd.DataFrame()
-        
-        if self.shap_explainer is None:
-            self.initialize_shap()
-        
-        logger.info(f"Calculating global feature importance using {n_samples} samples...")
-        logger.info("NOTE: This may take 5-10 minutes with KernelExplainer...")
-        
-        # Load data
-        train_data = pd.read_csv("../archive/merged_training_data.csv", nrows=n_samples)
-        result = self.explain_prediction(train_data, plot=True, n_samples=n_samples)
-        
-        importance_df = result.get('feature_importance', pd.DataFrame())
-        
-        if not importance_df.empty and save_json:
-            importance_dict = importance_df.to_dict('records')
-            with open('feature_importance.json', 'w') as f:
-                json.dump(importance_dict, f, indent=2)
-            logger.info("✓ Feature importance saved to: feature_importance.json")
-        
-        return importance_df
 
+        resolved_data_path = Path(data_path).expanduser()
+        if not resolved_data_path.is_absolute():
+            cwd_path = (
+                Path.cwd() / resolved_data_path
+            ).resolve()
+            module_path = (
+                self.module_dir / resolved_data_path
+            ).resolve()
+
+            if cwd_path.is_file():
+                resolved_data_path = cwd_path
+            else:
+                resolved_data_path = module_path
+
+        if not resolved_data_path.is_file():
+            raise FileNotFoundError(
+                "SHAP analysis data not found: "
+                f"{resolved_data_path}"
+            )
+
+        sample_count = max(1, int(n_samples))
+        analysis_data = pd.read_csv(
+            resolved_data_path,
+            nrows=sample_count,
+        )
+
+        if analysis_data.empty:
+            raise ValueError(
+                "SHAP analysis dataset contains no rows"
+            )
+
+        if self.shap_explainer is None:
+            self.initialize_shap(
+                background_data_path=str(
+                    resolved_data_path
+                )
+            )
+
+        resolved_output_path = Path(
+            output_path
+        ).expanduser()
+        if not resolved_output_path.is_absolute():
+            resolved_output_path = (
+                Path.cwd() / resolved_output_path
+            ).resolve()
+
+        resolved_output_path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        global_plot_path = (
+            resolved_output_path.parent
+            / "global_shap.png"
+        )
+
+        result = self.explain_prediction(
+            analysis_data,
+            sample_idx=0,
+            plot=True,
+            save_path=str(global_plot_path),
+            n_samples=len(analysis_data),
+        )
+
+        importance_df = result.get(
+            "feature_importance",
+            pd.DataFrame(),
+        )
+
+        if importance_df.empty:
+            return importance_df
+
+        if save_json:
+            importance_records = json.loads(
+                importance_df.to_json(
+                    orient="records"
+                )
+            )
+
+            payload = {
+                "model_path": str(self.model_path),
+                "analysis_data_path": str(
+                    resolved_data_path
+                ),
+                "sample_count": len(analysis_data),
+                "continuous_feature_count": (
+                    self.shap_continuous_count
+                ),
+                "categorical_features": list(
+                    self.shap_categorical_names
+                ),
+                "feature_importance": (
+                    importance_records
+                ),
+            }
+
+            with open(
+                resolved_output_path,
+                "w",
+                encoding="utf-8",
+            ) as output_file:
+                json.dump(
+                    payload,
+                    output_file,
+                    indent=2,
+                )
+
+            logger.info(
+                "SHAP feature importance saved to %s",
+                resolved_output_path,
+            )
+
+        return importance_df
 
 # ==================== CLI Interface ====================
 if __name__ == "__main__":
