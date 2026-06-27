@@ -6,18 +6,67 @@ Now delegates OMNeT++ parameter changes to OrchestrationShim via ZeroMQ.
 - Forwards valid actions to OrchestrationShim (REQ socket)
 - Logs metrics
 """
-
+import os
+import subprocess
 import zmq
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 import csv
 from pathlib import Path
 
 class OrchestrationAgent:
-    def __init__(self, zmq_port=5563, shim_port=6000, poll_interval=0.05, metrics_file="metrics.csv"):
-        self.zmq_port = zmq_port         # port for OptimizationAgent
-        self.shim_port = shim_port       # port to talk to OMNeT++ shim
+    @staticmethod
+    def _resolve_shim_host(shim_host, wsl_distro):
+        if shim_host:
+            return shim_host
+
+        configured_host = os.environ.get(
+            "ORCHESTRATION_SHIM_HOST"
+        )
+        if configured_host:
+            return configured_host
+
+        if os.name == "nt":
+            try:
+                result = subprocess.run(
+                    [
+                        "wsl.exe",
+                        "-d",
+                        wsl_distro,
+                        "hostname",
+                        "-I",
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+
+                addresses = result.stdout.strip().split()
+                if addresses:
+                    return addresses[0]
+
+            except (OSError, subprocess.SubprocessError):
+                pass
+
+        return "localhost"
+
+    def __init__(
+        self,
+        zmq_port=5563,
+        shim_port=6000,
+        shim_host=None,
+        wsl_distro="opp_env",
+        poll_interval=0.05,
+        metrics_file="metrics.csv",
+    ):
+        self.zmq_port = zmq_port
+        self.shim_port = shim_port
+        self.shim_host = self._resolve_shim_host(
+            shim_host,
+            wsl_distro,
+        )
         self.poll_interval = poll_interval
         self.metrics_file = Path(metrics_file)
 
@@ -29,15 +78,23 @@ class OrchestrationAgent:
         self.settling_time = 0.1  # seconds
 
         # REP socket to receive commands from OptimizationAgent
-        ctx = zmq.Context()
-        self.rep_socket = ctx.socket(zmq.REP)
-        self.rep_socket.bind(f"tcp://*:{self.zmq_port}")
+        self.context = zmq.Context()
+
+        self.rep_socket = self.context.socket(zmq.REP)
+        self.rep_socket.setsockopt(zmq.LINGER, 0)
+        self.rep_socket.bind(
+            f"tcp://*:{self.zmq_port}"
+        )
         print(f"[OrchestrationAgent] Listening for commands on tcp://*:{self.zmq_port}")
 
         # REQ socket to send commands to OMNeT++ shim
-        self.shim_socket = ctx.socket(zmq.REQ)
-        self.shim_socket.connect(f"tcp://localhost:{self.shim_port}")
-        print(f"[OrchestrationAgent] Connected to OrchestrationShim at tcp://localhost:{self.shim_port}")
+        self.shim_socket = None
+        self._connect_shim_socket()
+        print(
+            "[OrchestrationAgent] Connected to "
+            f"OrchestrationShim at "
+            f"tcp://{self.shim_host}:{self.shim_port}"
+        )
 
         # Ensure metrics file exists
         if not self.metrics_file.exists():
@@ -46,7 +103,61 @@ class OrchestrationAgent:
                 writer.writerow(["timestamp", "total", "successful", "failed", "last_action", "last_result", "action_counts"])
 
     def now_iso(self):
-        return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        return datetime.now(timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+
+    def _connect_shim_socket(self):
+        """Create a fresh REQ connection to OrchestrationShim."""
+
+        if self.shim_socket is not None:
+            self.shim_socket.close(linger=0)
+
+        self.shim_socket = self.context.socket(zmq.REQ)
+        self.shim_socket.setsockopt(zmq.LINGER, 0)
+        self.shim_socket.setsockopt(zmq.SNDTIMEO, 3000)
+        self.shim_socket.setsockopt(zmq.RCVTIMEO, 3000)
+        self.shim_socket.connect(
+            f"tcp://{self.shim_host}:{self.shim_port}"
+        )
+
+    def _send_to_shim(self, command):
+        """Send one command and recover the REQ socket on failure."""
+
+        try:
+            self.shim_socket.send_string(
+                json.dumps(command)
+            )
+            reply_text = self.shim_socket.recv_string()
+            return json.loads(reply_text)
+
+        except zmq.Again:
+            # A timed-out REQ socket cannot safely send another
+            # request until its request/reply state is reset.
+            self._connect_shim_socket()
+
+            return {
+                "accepted": False,
+                "error": "orchestration_shim_timeout",
+            }
+
+        except json.JSONDecodeError as error:
+            self._connect_shim_socket()
+
+            return {
+                "accepted": False,
+                "error": (
+                    f"invalid_shim_response: {error}"
+                ),
+            }
+
+        except Exception as error:
+            self._connect_shim_socket()
+
+            return {
+                "accepted": False,
+                "error": str(error),
+            }
 
     def append_metrics_csv(self, last_action, last_result):
         with open(self.metrics_file, "a", newline="") as f:
@@ -62,260 +173,303 @@ class OrchestrationAgent:
             ])
 
     def process_command(self, payload):
-        self.total_commands += 1
-        last_action = ""
-        last_result = "FAILED_PARSE"
+        """Normalize and forward an orchestration command."""
 
-        print(f"[DEBUG] Raw payload received: {payload}")
+        self.total_commands += 1
+        action = "unknown"
+        result_name = "ERROR"
 
         try:
-            j = json.loads(payload)
-            action = j.get("action", "")
-            target = j.get("target", "")
-        
-            print(f"[DEBUG] Parsed action: '{action}'")
-            print(f"[DEBUG] Parsed target: '{target}'")
-        
-            params = j.get("param", {})
-            last_action = action
-            self.action_counts[action] = self.action_counts.get(action, 0) + 1
-
-        # ✅ SPECIAL HANDLING FOR HEALING PLANS
-            if action == "executeHealingPlan":
-                print(f"[OrchestrationAgent] 🔧 Processing healing plan for {target}")
-            
-            # ✅ ANALYZE VIOLATIONS TO DETERMINE ACTIONS
-                violations = j.get("critical_violations", [])
-                recommendations = j.get("structured_recommendations", {})
-            
-            # Initialize shim-compatible parameters
-                delta_tx_db = 0.0
-                tx_power_dbm = 20.0  # Default safe power level
-                es_mode = "normal"   # Default energy saving mode
-            
-            # Parse violations for power and latency issues
-                power_violation_found = False
-                latency_violation_found = False
-            
-                for violation in violations:
-                    message = violation.get("message", "").lower()
-                    severity = violation.get("severity", "").lower()
-                
-                    print(f"[OrchestrationAgent] Analyzing violation: {message}")
-                
-                # Power violations - reduce TX power
-                    if "transmission power" in message and "exceeds" in message:
-                        if "65.0dbm" in message and "43.0dbm" in message:
-                        # Specific violation: 65dBm exceeds 43dBm max
-                            delta_tx_db = -22.0  # Reduce from 65 to 43 dBm
-                            tx_power_dbm = 43.0  # Set to compliance level
-                            power_violation_found = True
-                            print(f"[OrchestrationAgent] Power violation detected: reducing to 43dBm")
-                        else:
-                        # General power violation
-                            delta_tx_db = -5.0   # Reduce by 5dB
-                            tx_power_dbm = 20.0  # Safe level
-                            power_violation_found = True
-                            print(f"[OrchestrationAgent] General power violation: reducing by 5dB")
-                        
-                # Latency violations - enable energy saving
-                    if any(term in message for term in ["latency", "urllc", "network slice", "autonomous vehicle"]):
-                        if "exceeds" in message or severity == "critical":
-                            es_mode = "sleep"
-                            latency_violation_found = True
-                            print(f"[OrchestrationAgent] Latency violation detected: enabling sleep mode")
-            
-            # Apply recommendation-based adjustments
-                config_mods = recommendations.get("config_modifications", {})
-                if config_mods.get("gradual_power_reduction", False) and not power_violation_found:
-                    delta_tx_db = -3.0  # Gentle power reduction
-                    print(f"[OrchestrationAgent] Applying gradual power reduction from recommendations")
-                
-                if config_mods.get("enable_low_latency_mode", False) and not latency_violation_found:
-                    es_mode = "active"  # Active mode for low latency
-                    print(f"[OrchestrationAgent] Enabling active mode for low latency")
-            
-            # ✅ CREATE SHIM-COMPATIBLE COMMAND (matches OrchestrationShim.cc format)
-                healing_shim_command = {
-                "bs_id": target,           # Base station ID
-                "delta_tx_db": delta_tx_db,    # Power adjustment in dB
-                "tx_power_dbm": tx_power_dbm,  # Absolute power level
-                "es_mode": es_mode             # Energy saving mode
-                }
-            
-                try:
-                    print(f"[OrchestrationAgent] 📡 Sending healing config to OrchestrationShim...")
-                    print(f"[OrchestrationAgent] Healing config: {healing_shim_command}")
-                
-                # Set timeouts for shim communication
-                    self.shim_socket.setsockopt(zmq.SNDTIMEO, 3000)  # 3 second timeout
-                    self.shim_socket.setsockopt(zmq.RCVTIMEO, 3000)  # 3 second timeout
-                
-                # Send to OrchestrationShim
-                    self.shim_socket.send_string(json.dumps(healing_shim_command))
-                    shim_reply = self.shim_socket.recv_string()
-                
-                    print(f"[OrchestrationAgent] Shim reply: {shim_reply}")
-                
-                    reply_obj = json.loads(shim_reply)
-                
-                # ✅ CHECK FOR SHIM SUCCESS (matches OrchestrationShim.cc response)
-                    if reply_obj.get("accepted", False):
-                        applied_count = reply_obj.get("applied_count", 0)
-                        sim_time = reply_obj.get("applied_at_sim_s", 0.0)
-                    
-                        last_result = "HEALING_PLAN_APPLIED"
-                        self.successful += 1
-                        print(f"[OrchestrationAgent] ✅ Healing plan applied successfully!")
-                        print(f"[OrchestrationAgent] Applied {applied_count} changes at simulation time {sim_time}s")
-                    
-                    elif "accepted" in reply_obj and not reply_obj["accepted"]:
-                    # Shim explicitly rejected
-                        last_result = "HEALING_PLAN_REJECTED"
-                        self.failed += 1
-                        print(f"[OrchestrationAgent] ❌ Shim rejected healing plan: {reply_obj}")
-                    
-                    else:
-                        # Legacy response format or error
-                        if reply_obj.get("status") == "OK":
-                            last_result = "HEALING_PLAN_APPLIED"
-                            self.successful += 1
-                            print(f"[OrchestrationAgent] ✅ Healing plan applied (legacy format)")
-                        else:
-                            last_result = "HEALING_PLAN_QUEUED"
-                            self.successful += 1
-                            print(f"[OrchestrationAgent] ⚠️ Healing plan queued: {reply_obj.get('detail', 'Unknown status')}")
-                    
-                except zmq.Again:
-                # Timeout - still consider success since plan was valid
-                    last_result = "HEALING_PLAN_TIMEOUT"
-                    self.successful += 1
-                    print(f"[OrchestrationAgent] ⚠️ OrchestrationShim timeout - healing plan was valid but shim not responding")
-                
-                except json.JSONDecodeError as json_error:
-                    last_result = "HEALING_PLAN_INVALID_RESPONSE"
-                    self.failed += 1
-                    print(f"[OrchestrationAgent] ❌ Invalid JSON response from shim: {json_error}")
-                
-                except Exception as shim_error:
-                    last_result = "HEALING_PLAN_COMM_ERROR"
-                    self.failed += 1
-                    print(f"[OrchestrationAgent] ❌ Shim communication error: {shim_error}")
-        
+            if isinstance(payload, str):
+                request = json.loads(payload)
+            elif isinstance(payload, dict):
+                request = payload
             else:
-            # ✅ EXISTING LOGIC FOR REGULAR COMMANDS
-                now = time.time()
-                if target in self.last_action_time and (now - self.last_action_time[target]) < self.settling_time:
-                    print(f"[OrchestrationAgent] Skipping command to {target} (settling time not elapsed)")
-                    last_result = "SKIPPED_SETTLING"
+                raise ValueError(
+                    "Payload must be JSON text or a dictionary"
+                )
+
+            action = str(request.get("action", ""))
+            target = str(request.get("target", ""))
+            control_mode = str(
+                request.get("control_mode", "unknown")
+            )
+
+            self.action_counts[action] = (
+                self.action_counts.get(action, 0) + 1
+            )
+
+            # --------------------------------------------------
+            # Normal optimization configuration
+            # --------------------------------------------------
+            if action == "applyConfiguration":
+                params = dict(request.get("param", {}))
+
+                bs_id = str(
+                    params.get("bs_id", target)
+                )
+
+                if not bs_id or bs_id == "unknown":
+                    raise ValueError(
+                        "applyConfiguration requires a BS ID"
+                    )
+
+                shim_command = {
+                    "bs_id": bs_id,
+                }
+
+                if "tx_power_dbm" in params:
+                    shim_command["tx_power_dbm"] = float(
+                        params["tx_power_dbm"]
+                    )
+
+                if "es_mode" in params:
+                    shim_command["es_mode"] = str(
+                        params["es_mode"]
+                    )
+
+                # Retain these values for future shim support.
+                if "bandwidth_mhz" in params:
+                    shim_command["bandwidth_mhz"] = int(
+                        params["bandwidth_mhz"]
+                    )
+
+                if "carrier_count" in params:
+                    shim_command["carrier_count"] = int(
+                        params["carrier_count"]
+                    )
+
+                if "es_modes" in params:
+                    shim_command["es_modes"] = list(
+                        params["es_modes"]
+                    )
+
+            # --------------------------------------------------
+            # AI healing after a rejected optimization
+            # --------------------------------------------------
+            elif action == "executeHealingPlan":
+                bs_id = target
+
+                if not bs_id or bs_id == "unknown":
+                    raise ValueError(
+                        "executeHealingPlan requires a BS ID"
+                    )
+
+                recommendations = request.get(
+                    "structured_recommendations", {}
+                )
+                config_modifications = recommendations.get(
+                    "config_modifications", {}
+                )
+
+                # Begin with a conservative, QoS-safe state.
+                tx_power_dbm = float(
+                    config_modifications.get(
+                        "tx_power_dbm",
+                        config_modifications.get(
+                            "target_tx_power_dbm",
+                            43.0,
+                        ),
+                    )
+                )
+                es_mode = str(
+                    config_modifications.get(
+                        "es_mode", "active"
+                    )
+                )
+
+                # Critical latency/reliability violations must
+                # disable sleep modes.
+                for violation in request.get(
+                    "critical_violations", []
+                ):
+                    message = str(
+                        violation.get("message", "")
+                    ).lower()
+
+                    if any(
+                        term in message
+                        for term in (
+                            "latency",
+                            "reliability",
+                            "packet loss",
+                            "throughput",
+                            "urllc",
+                        )
+                    ):
+                        es_mode = "active"
+
+                    if any(
+                        term in message
+                        for term in (
+                            "transmission power",
+                            "tx power",
+                            "43 dbm",
+                        )
+                    ):
+                        tx_power_dbm = min(
+                            tx_power_dbm, 43.0
+                        )
+
+                shim_command = {
+                    "bs_id": bs_id,
+                    "tx_power_dbm": tx_power_dbm,
+                    "es_mode": es_mode,
+                }
+
+            # --------------------------------------------------
+            # Limited legacy-command compatibility
+            # --------------------------------------------------
+            elif action in {
+                "setTxPower",
+                "enterSleepMode",
+            }:
+                params = dict(request.get("param", {}))
+
+                bs_id = target
+                if bs_id.startswith("gnb["):
+                    bs_id = bs_id[4:-1]
+
+                shim_command = {
+                    "bs_id": bs_id,
+                }
+
+                if action == "setTxPower":
+                    shim_command["tx_power_dbm"] = float(
+                        params["power"]
+                    )
                 else:
-                    self.last_action_time[target] = now
+                    shim_command["es_mode"] = str(
+                        params["mode"]
+                    )
 
-                    try:
-                    # Forward regular command to shim
-                        print(f"[OrchestrationAgent] 📡 Forwarding regular command: {action}")
-                    
-                        self.shim_socket.setsockopt(zmq.SNDTIMEO, 3000)
-                        self.shim_socket.setsockopt(zmq.RCVTIMEO, 3000)
+            else:
+                raise ValueError(
+                    f"Unsupported orchestration action: {action}"
+                )
 
-                        self.shim_socket.send_string(json.dumps(j))
-                        shim_reply = self.shim_socket.recv_string()
-                    
-                        print(f"[OrchestrationAgent] Regular command - Shim reply: {shim_reply}")
+            shim_reply = self._send_to_shim(
+                shim_command
+            )
 
-                        reply_obj = json.loads(shim_reply)
-                    
-                    # Handle both new and legacy response formats
-                        if reply_obj.get("accepted", False) or reply_obj.get("status") == "OK":
-                            last_result = "OK"
-                            self.successful += 1
-                        else:
-                            last_result = reply_obj.get("detail", reply_obj.get("error", "FAILED"))
-                            self.failed += 1
-                        
-                    except zmq.Again:
-                        last_result = "COMMAND_TIMEOUT"
-                        self.failed += 1
-                        print(f"[OrchestrationAgent] ❌ Regular command timeout")
-                    
-                    except json.JSONDecodeError as json_error:
-                        last_result = "INVALID_SHIM_RESPONSE"
-                        self.failed += 1
-                        print(f"[OrchestrationAgent] ❌ Invalid JSON from shim: {json_error}")
-                    
-                    except Exception as shim_error:
-                        last_result = f"SHIM_ERROR: {str(shim_error)}"
-                        self.failed += 1
-                        print(f"[OrchestrationAgent] ❌ Shim error: {shim_error}")
+            accepted = bool(
+                shim_reply.get("accepted", False)
+            )
+            applied_count = int(
+                shim_reply.get("applied_count", 0)
+            )
 
-        except json.JSONDecodeError as parse_error:
-            print(f"[OrchestrationAgent] ❌ JSON parsing error: {parse_error}")
-            self.failed += 1
-            last_result = f"INVALID_JSON: {str(parse_error)}"
-        
-        except Exception as e:
-            print(f"[OrchestrationAgent] ❌ Unexpected error processing command: {e}")
-            self.failed += 1
-            last_result = f"PROCESSING_ERROR: {str(e)}"
+            if accepted and applied_count > 0:
+                result_name = "OK"
+                self.successful += 1
+            else:
+                result_name = "SHIM_REJECTED"
+                self.failed += 1
 
-    # ✅ LOG METRICS
-        self.append_metrics_csv(last_action, last_result)
-
-    # ✅ CREATE RESPONSE
-        success_statuses = [
-        "OK", 
-        "HEALING_PLAN_APPLIED", 
-        "HEALING_PLAN_QUEUED",
-        "HEALING_PLAN_TIMEOUT",  # Still success - plan was valid
-        "SKIPPED_SETTLING"
-        ]
-    
-        reply = {
-        "status": "OK" if last_result in success_statuses else "ERROR",
-        "detail": last_result,
-        "total": self.total_commands,
-        "successful": self.successful,
-        "failed": self.failed,
-        "timestamp": datetime.utcnow().isoformat()
-        }
-    
-        return json.dumps(reply)
-    
-    def run(self):
-        """Main loop - listen for commands and respond"""
-        print(f"[OrchestrationAgent] Starting main loop...")
-    
-        while True:
-            try:
-            # ✅ RECEIVE REQUEST (blocking)
-                request = self.rep_socket.recv_string()
-                print(f"[OrchestrationAgent] Received: {request}")
-            
-            # ✅ PROCESS COMMAND
-                response = self.process_command(request)
-            
-            # ✅ SEND RESPONSE (CRITICAL FOR REQ-REP!)
-                self.rep_socket.send_string(response)
-                print(f"[OrchestrationAgent] Sent response: {response[:100]}...")
-            
-            except KeyboardInterrupt:
-                print(f"[OrchestrationAgent] Shutting down...")
-                break
-            except Exception as e:
-                print(f"[OrchestrationAgent] Error in main loop: {e}")
-            # ✅ STILL SEND ERROR RESPONSE
-                error_response = json.dumps({
-                "status": "ERROR",
-                "detail": f"Processing error: {str(e)}",
+            response = {
+                "status": (
+                    "OK"
+                    if result_name == "OK"
+                    else "ERROR"
+                ),
+                "detail": result_name,
+                "action": action,
+                "control_mode": control_mode,
+                "target": target,
+                "shim_command": shim_command,
+                "shim_reply": shim_reply,
                 "total": self.total_commands,
                 "successful": self.successful,
-                "failed": self.failed
-                })
-                try:
-                    self.rep_socket.send_string(error_response)
-                except:
-                    pass
+                "failed": self.failed,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
 
+        except json.JSONDecodeError as error:
+            self.failed += 1
+            result_name = "INVALID_JSON"
+
+            response = {
+                "status": "ERROR",
+                "detail": result_name,
+                "error": str(error),
+                "total": self.total_commands,
+                "successful": self.successful,
+                "failed": self.failed,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+        except Exception as error:
+            self.failed += 1
+            result_name = "PROCESSING_ERROR"
+
+            response = {
+                "status": "ERROR",
+                "detail": result_name,
+                "action": action,
+                "error": str(error),
+                "total": self.total_commands,
+                "successful": self.successful,
+                "failed": self.failed,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+        self.append_metrics_csv(
+            action,
+            result_name,
+        )
+
+        return json.dumps(response)
+    
+    def run(self):
+        """Listen for commands and support clean shutdown."""
+        print(
+            "[OrchestrationAgent] Starting main loop..."
+        )
+
+        poller = zmq.Poller()
+        poller.register(
+            self.rep_socket,
+            zmq.POLLIN,
+        )
+
+        try:
+            while True:
+                events = dict(
+                    poller.poll(timeout=250)
+                )
+
+                if self.rep_socket not in events:
+                    continue
+
+                request = self.rep_socket.recv_string()
+                print(
+                    "[OrchestrationAgent] Received: "
+                    f"{request}"
+                )
+
+                response = self.process_command(
+                    request
+                )
+
+                self.rep_socket.send_string(response)
+                print(
+                    "[OrchestrationAgent] Sent response: "
+                    f"{response[:100]}..."
+                )
+
+        except KeyboardInterrupt:
+            print(
+                "[OrchestrationAgent] Shutting down..."
+            )
+
+        finally:
+            poller.unregister(self.rep_socket)
+            self.rep_socket.close(linger=0)
+
+            if self.shim_socket is not None:
+                self.shim_socket.close(linger=0)
+
+            self.context.term()
 
 if __name__ == "__main__":
     agent = OrchestrationAgent(zmq_port=5563)  # Ensure port matches the one set in OptimizationAgent
