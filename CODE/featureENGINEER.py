@@ -71,15 +71,21 @@ class FarziFeatureEngineer:
             df['w'] = 1.0
         
         # Load binning
-        if 'load' in df.columns:
-            df['load_bin'] = pd.cut(
-                df['load'], 
-                bins=100, 
-                labels=False, 
-                duplicates='drop'
-            ).fillna(-1).astype(int)
+        if "load" in df.columns:
+            load_values = (
+                pd.to_numeric(
+                df["load"],
+                errors="coerce",
+                )
+                .fillna(0.0)
+                .clip(0.0, 1.0)
+            )
+            df["load_bin"] = np.minimum(
+                np.floor(load_values * 100.0).astype(int),
+                99,
+            )
         else:
-            df['load_bin'] = 0
+            df["load_bin"] = 0
         
         # Load splines
         if 'load' in df.columns and not df['load'].isna().all():
