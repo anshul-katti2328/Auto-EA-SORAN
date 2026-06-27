@@ -567,46 +567,80 @@ class PolicyManager:
         self.logger.info(f"Policies by severity: {by_severity}")
         self.logger.info(f"Policies by category: {by_category}")
     
-    def get_applicable_policies(self, bs_type: str, service_types: List[str]) -> Dict[str, Policy]:
-        """Get policies applicable to specific BS and service types"""
+    def get_applicable_policies(
+        self,
+        bs_type: str,
+        service_types: List[str],
+    ) -> Dict[str, Policy]:
+        """Select only policies relevant to measured KPIs and active services."""
+
         applicable = {}
-        
+        services = {
+            str(service).strip().lower()
+            for service in (service_types or [])
+        }
+
         for policy_id, policy in self.all_policies.items():
-            # Include all energy policies
+            policy_text = (
+                f"{policy.name} {policy.description}"
+            ).lower()
+
+            # Energy policies may be considered, but unsupported
+            # measurements are skipped later by _map_policy_to_kpi().
             if policy.category == PolicyCategory.ENERGY_EFFICIENCY:
                 applicable[policy_id] = policy
                 continue
-            
-            # Include 5QI policies for active services
+
+            # Radio policies are equipment-wide. Each policy still needs
+            # an explicitly matching KPI.
+            if policy.category == PolicyCategory.RADIO_RESOURCES:
+                applicable[policy_id] = policy
+                continue
+
+            # 5QI requirements apply only when their corresponding
+            # service is active.
             if policy.category == PolicyCategory.QOS_5QI:
-                if any(service in policy.description.lower() for service in service_types):
+                if any(service in policy_text for service in services):
                     applicable[policy_id] = policy
                 continue
-            
-            # Include service-specific policies
-            service_categories = [
-                PolicyCategory.AUTONOMOUS_VEHICLE,
-                PolicyCategory.IOT_SERVICES,
-                PolicyCategory.NETWORK_SLICING,
-                PolicyCategory.DENSE_DEPLOYMENT
-            ]
-            if policy.category in service_categories:
-                # Check if service type matches policy
-                for service in service_types:
-                    if (service.lower() in policy.description.lower() or
-                        service.lower() in policy.name.lower()):
-                        applicable[policy_id] = policy
-                        break
-            
-            # Include Nokia policies for Nokia equipment
-            if policy.standard == PolicyStandard.NOKIA_PROPRIETARY and "nokia" in bs_type.lower():
-                applicable[policy_id] = policy
+
+            # Do not treat capability targets as universal throughput
+            # floors. Enable them only for an explicitly modelled SLA.
+            if policy.category == PolicyCategory.THROUGHPUT:
+                if "embb_sla" in services:
+                    applicable[policy_id] = policy
                 continue
-            
-            # Include all other high/critical policies
-            if policy.severity in [PolicySeverity.CRITICAL, PolicySeverity.HIGH]:
-                applicable[policy_id] = policy
-        
+
+            if policy.category == PolicyCategory.DENSE_DEPLOYMENT:
+                if "dense_urban_sla" in services:
+                    applicable[policy_id] = policy
+                continue
+
+            if policy.category in {
+                PolicyCategory.LATENCY_PERFORMANCE,
+                PolicyCategory.NETWORK_SLICING,
+            }:
+                if "urllc" in services:
+                    applicable[policy_id] = policy
+                continue
+
+            if policy.category == PolicyCategory.RELIABILITY:
+                if "embb_sla" in services:
+                    applicable[policy_id] = policy
+                continue
+
+            if policy.category == PolicyCategory.AUTONOMOUS_VEHICLE:
+                if "autonomous_vehicle" in services:
+                    applicable[policy_id] = policy
+                continue
+
+            if policy.category == PolicyCategory.IOT_SERVICES:
+                if services.intersection(
+                    {"industrial_iot", "massive_iot"}
+                ):
+                    applicable[policy_id] = policy
+                continue
+
         return applicable
     
     def validate_kpi_values(self, bs_id: str, current_kpis: Dict[str, float], 
@@ -644,68 +678,111 @@ class PolicyManager:
                                 if v['severity'] == 'critical' and v.get('blocks_optimization', False)]
                 critical_violations.extend(critical_viols)
         
+        evaluated_policy_ids = list(validation_results.keys())
+
         return {
             'bs_id': bs_id,
-            'total_policies_checked': len(applicable_policies),
-            'policies_compliant': len([r for r in validation_results.values() if r['is_compliant']]),
+            'total_policies_selected': len(applicable_policies),
+            'total_policies_checked': len(validation_results),
+            'policies_compliant': len([
+                result
+                for result in validation_results.values()
+                if result['is_compliant']
+            ]),
             'total_violations': len(all_violations),
-            'critical_violations': len(critical_violations),
+            'critical_violations': critical_violations,
             'blocks_optimization': len(critical_violations) > 0,
             'validation_results': validation_results,
             'all_violations': all_violations,
-            'critical_violations': critical_violations,
-            'applicable_policies': list(applicable_policies.keys())
+            'selected_policies': list(applicable_policies.keys()),
+            'applicable_policies': evaluated_policy_ids,
         }
     
-    def _map_policy_to_kpi(self, policy: Policy, current_kpis: Dict[str, float], 
-                          predicted_kpis: Dict[str, float]) -> Tuple[Optional[float], Optional[float]]:
-        """Map policy to corresponding KPI values"""
-        
-        # Enhanced KPI mapping with new policy categories
-        kpi_mappings = {
-            # Latency mappings
-            PolicyCategory.QOS_5QI: 'avg_latency',
-            PolicyCategory.LATENCY_PERFORMANCE: 'avg_latency',
-            PolicyCategory.NETWORK_SLICING: 'avg_latency',
-            PolicyCategory.AUTONOMOUS_VEHICLE: 'avg_latency',
-            
-            # Energy mappings  
-            PolicyCategory.ENERGY_EFFICIENCY: self._get_energy_kpi(policy),
-            
-            # Throughput mappings
-            PolicyCategory.THROUGHPUT: 'avg_throughput',
-            PolicyCategory.DENSE_DEPLOYMENT: 'avg_throughput',
-            PolicyCategory.IOT_SERVICES: self._get_iot_kpi(policy),
-            
-            # Radio resource mappings
-            PolicyCategory.RADIO_RESOURCES: 'prb_utilization',
-            
-            # Reliability mappings
-            PolicyCategory.RELIABILITY: 'packet_loss_rate'
-        }
-        
-        kpi_name = kpi_mappings.get(policy.category)
-        
-        if isinstance(kpi_name, str):
-            current_value = current_kpis.get(kpi_name)
-            predicted_value = predicted_kpis.get(kpi_name)
+    def _map_policy_to_kpi(
+        self,
+        policy: Policy,
+        current_kpis: Dict[str, float],
+        predicted_kpis: Dict[str, float],
+    ) -> Tuple[Optional[float], Optional[float]]:
+        """Map a policy only to a dimensionally compatible KPI."""
+
+        if policy.category in {
+            PolicyCategory.QOS_5QI,
+            PolicyCategory.LATENCY_PERFORMANCE,
+            PolicyCategory.NETWORK_SLICING,
+            PolicyCategory.AUTONOMOUS_VEHICLE,
+        }:
+            kpi_name = "avg_latency"
+
+        elif policy.category in {
+            PolicyCategory.THROUGHPUT,
+            PolicyCategory.DENSE_DEPLOYMENT,
+        }:
+            kpi_name = "avg_throughput"
+
+        elif policy.category == PolicyCategory.ENERGY_EFFICIENCY:
+            kpi_name = self._get_energy_kpi(policy)
+
+        elif policy.category == PolicyCategory.RADIO_RESOURCES:
+            kpi_name = self._get_radio_kpi(policy)
+
+        elif policy.category == PolicyCategory.IOT_SERVICES:
+            kpi_name = self._get_iot_kpi(policy)
+
+        elif policy.category == PolicyCategory.RELIABILITY:
+            kpi_name = "packet_loss_rate"
+
         else:
-            # Handle complex mappings
-            current_value = kpi_name
-            predicted_value = kpi_name
-        
-        return current_value, predicted_value
+            kpi_name = None
+
+        if not kpi_name:
+            return None, None
+
+        return (
+            current_kpis.get(kpi_name),
+            predicted_kpis.get(kpi_name),
+        )
     
-    def _get_energy_kpi(self, policy: Policy) -> str:
-        """Get appropriate energy KPI based on policy"""
-        if "efficiency" in policy.name.lower():
-            return 'energy_efficiency'
-        elif "consumption" in policy.name.lower():
-            return 'energy_consumption'
-        elif "power" in policy.name.lower():
-            return 'tx_power'
-        else:
-            return 'energy_efficiency'  # Default
+    def _get_energy_kpi(self, policy: Policy) -> Optional[str]:
+        """Return a KPI with units compatible with the energy policy."""
+
+        name = policy.name.lower()
+
+        if "thermal" in name:
+            return "temperature_c"
+
+        if "renewable" in name:
+            return "renewable_energy_pct"
+
+        if "massive mimo" in name:
+            return "antenna_utilization_pct"
+
+        if "saving mode" in name:
+            return "energy_saving_pct"
+
+        if "power consumption" in name:
+            return "energy_consumption"
+
+        if "energy efficiency" in name:
+            # Existing policy thresholds use bytes/J, while runtime
+            # telemetry currently exposes a differently scaled metric.
+            return "energy_efficiency_bytes_per_j"
+
+        return None
+
+    def _get_radio_kpi(self, policy: Policy) -> Optional[str]:
+        """Return a dimensionally compatible radio KPI."""
+
+        name = policy.name.lower()
+
+        if "transmission power" in name:
+            return "tx_power"
+
+        if "radio resource efficiency" in name:
+            # PRB utilization is load, not radio efficiency.
+            return "radio_efficiency_pct"
+
+        return None
     
     def _get_iot_kpi(self, policy: Policy) -> str:
         """Get appropriate IoT KPI based on policy"""
@@ -741,10 +818,22 @@ POLICY_MANAGER = PolicyManager()
 # UTILITY FUNCTIONS FOR EASY ACCESS
 # =============================================================================
 
-def validate_energy_plan_policies(bs_id: str, current_kpis: Dict[str, float], 
-                                predicted_kpis: Dict[str, float]) -> Dict[str, Any]:
-    """Simplified function to validate energy plan against all policies"""
-    return POLICY_MANAGER.validate_kpi_values(bs_id, current_kpis, predicted_kpis)
+def validate_energy_plan_policies(
+    bs_id: str,
+    current_kpis: Dict[str, float],
+    predicted_kpis: Dict[str, float],
+    bs_type: str = "nokia_airscale",
+    active_services: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Validate only policies applicable to the active service context."""
+
+    return POLICY_MANAGER.validate_kpi_values(
+        bs_id=bs_id,
+        current_kpis=current_kpis,
+        predicted_kpis=predicted_kpis,
+        bs_type=bs_type,
+        active_services=active_services,
+    )
 
 def get_critical_policy_violations(validation_result: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Extract critical violations that would block energy optimization"""
