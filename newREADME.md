@@ -666,3 +666,546 @@ text
 Built with PyTorch, TensorFlow, ZMQ, and OMNeT++ | Optimizing 5G Energy Consumption in Real-Time
 
 Last Updated: 16th November 2025
+
+---
+
+# 2026 Implementation Update: Scalable Simu5G Closed-Loop Validation
+
+> **Status note:** This section records the implementation and measurements validated during the 2026 Simu5G integration work. Where an older example, port, topology size, runtime claim, or projected performance figure above differs from this section, the validated information below takes precedence. The earlier material has been retained as project history.
+
+## What Was Improved
+
+The project has moved from a prototype agent demonstration to a physically connected Simu5G closed loop with reproducible deterministic-versus-AI experiments. The principal improvements are:
+
+- replacement of the earlier placeholder seven-cell topology with 30 genuine Simu5G NR gNodeBs;
+- deployment of 90 genuine NR UEs, with three UEs positioned around every gNB;
+- a city-style topology containing dense urban and lower-density zones;
+- a compressed 24-hour traffic cycle containing very-low, low, medium, and peak conditions;
+- real Simu5G runtime telemetry for PRB allocation, throughput, latency, packet loss, SINR, UE association, and radio state;
+- a runtime-controllable gNB PHY for physical transmit-power and deep-sleep application;
+- structured acknowledgements that distinguish requested configuration from physically applied configuration;
+- separate deterministic/rule-based and AI-based experimental modes;
+- batched 30-cell Keras inference with uncertainty estimation;
+- bounded AI optimization, policy validation, and minimum-benefit deployment protection;
+- experiment collection, matched-window KPI analysis, and scenario comparison plots;
+- offline and live Kernel SHAP explainability workflows;
+- safeguards for ZeroMQ timeout recovery, stale telemetry, message backlog, active-UE protection, and repeated healing plans.
+
+## Canonical Simu5G Project
+
+The maintained simulation project is:
+
+```text
+CODE/Simu5G/auto-easoran-sim/
+```
+
+Important components include:
+
+| File | Purpose |
+|---|---|
+| `ned/autoeasoran/zmqonly/AutoEASORANNetwork.ned` | Defines the genuine 30-gNB, 90-UE Simu5G topology and core network. |
+| `ned/autoeasoran/zmqonly/TwinMetricsAgent.ned` | Declares runtime telemetry parameters. |
+| `ned/autoeasoran/zmqonly/ControllableGnbPhy.ned` | Extends the native Simu5G gNB PHY with runtime controls. |
+| `src/TwinMetricsAgent.cc/.h` | Collects and publishes runtime cell metrics and represented energy. |
+| `src/ControllableGnbPhy.cc/.h` | Applies transmit-power and deep-sleep state to the actual simulated PHY. |
+| `src/OrchestrationShim.cc/.h` | Receives commands from Python and applies them to the requested gNB. |
+| `src/ShimRegistry.h` | Shares requested/applied per-BS configuration between orchestration and telemetry. |
+| `omnetpp.ini` | Configures topology scale, applications, UE placement, PHY type, traffic, and ZeroMQ endpoints. |
+| `demo.xml` | Provides IPv4 interface configuration for the expanded topology. |
+
+Obsolete prototype NED, INI, shim, and registry files that previously existed directly under `CODE/` are not the canonical simulation sources.
+
+## Validated Network Scale
+
+The current default experiment uses:
+
+```text
+30 gNodeBs
+90 NR UEs
+3 UEs per gNodeB
+20 MHz physical bandwidth
+30 kHz subcarrier spacing
+51 configured PRBs per cell
+```
+
+The telemetry publisher emits one ordered entry per cell. BS identifiers `1001` through `1030` correspond to Simu5G cell indices `0` through `29`.
+
+UEs use stationary mobility for reproducible paired experiments. Their positions are distributed around the corresponding gNB locations instead of being placed at a single common coordinate. Dynamic cell association is enabled and the collector records the count of unassociated UEs so invalid runs can be rejected.
+
+## Compressed Daily Traffic Model
+
+The simulation represents a complete logical day in 60 physical simulation seconds:
+
+```text
+logicalTimeScale = 1440
+1 physical second = 1440 logical seconds = 24 logical minutes
+60 physical seconds = 86,400 logical seconds = 24 hours
+```
+
+The traffic schedule models:
+
+- very-low overnight demand;
+- morning and office-hour growth;
+- moderate afternoon traffic;
+- evening peak demand representing matches or large public events;
+- a return to low overnight demand.
+
+The logical-time compression reduces experiment turnaround time but does not remove Simu5G discrete-event processing cost. A 60-second simulated run may still take several minutes of wall-clock time on a laptop.
+
+## Updated End-to-End Architecture
+
+```text
+Simu5G gNBs and UEs
+        |
+        v
+TwinMetricsAgent -- PUB 5556 --> Prediction Agent
+                                         |
+                                         v
+                              Optimization Agent
+                                /             \
+                    deterministic rules       AI optimization + LLM healing
+                                                    |
+                                                    v
+                                             Feedback Agent
+                                                    |
+                                                    v
+                                      Orchestration Agent -- 5563
+                                                    |
+                                                    v
+                                      OrchestrationShim -- 6000
+                                                    |
+                                                    v
+                                      ControllableGnbPhy
+                                                    |
+                                                    v
+                               TwinMetricsAgent measures the result
+```
+
+The control loop is considered successful only when the shim acknowledges that the target gNB was resolved and the supported physical state was applied.
+
+## Current ZeroMQ Port Map
+
+The active YAML and OMNeT++ configuration uses:
+
+| Port | Component | Purpose |
+|---:|---|---|
+| 5555 | Prediction Agent | Direct prediction request listener. |
+| 5556 | TwinMetricsAgent | Simu5G metrics PUB stream. |
+| 5557 | OrchestrationShim | Physical-application status PUB stream. |
+| 5558 | Optimization Agent | Prediction input receiver. |
+| 5559 | Optimization Agent | Feedback result receiver. |
+| 5560 | Feedback Agent | Validation request receiver. |
+| 5561 | Feedback Agent | Feedback status publisher. |
+| 5563 | Orchestration Agent | Approved configuration command listener. |
+| 5564 | Optimization Agent | Optimization status publisher. |
+| 6000 | OrchestrationShim | Simu5G command REP endpoint. |
+
+The YAML configuration is authoritative when an older source-code default or earlier documentation table differs.
+
+## Deterministic and AI Experimental Modes
+
+### Deterministic/rule-based mode
+
+Deterministic mode uses monitoring and Keras prediction but selects configurations from explicit operator rules in `rule_based_controller.py`. It does not use LLM plan generation or Feedback Agent validation for decision selection.
+
+The rule result includes:
+
+- selected transmit power;
+- bandwidth and carrier request;
+- named energy-saving mode;
+- six ES-mode flags;
+- rule name;
+- human-readable reason.
+
+The controller protects cells with associated UEs from inappropriate deep sleep and prioritizes QoS recovery when latency or loss exceeds configured limits.
+
+### AI-based mode
+
+AI mode uses:
+
+- Keras energy predictions and confidence;
+- bounded multi-objective configuration search;
+- LLM-assisted healing-plan construction;
+- Feedback Agent policy and QoS validation;
+- physical orchestration through the shim;
+- post-application monitoring.
+
+The current optimizer uses bounded population and generation settings suitable for the laptop experiment. It also limits repeated healing plans so one telemetry snapshot cannot trigger an unbounded sequence of LLM calls.
+
+### Minimum-benefit deployment guard
+
+AI candidates are not automatically deployed. The predicted saving is compared with the predicted current-state baseline:
+
+```text
+deploy only when predicted energy saving >= 0.5%
+```
+
+Candidates such as BWP adaptation or Micro-DTX may therefore be evaluated but skipped when they provide negative or negligible predicted benefit. This is a prediction-backed safety/economic guard, not evidence that those modes are universally ineffective.
+
+## Physical Application Semantics
+
+The physical Simu5G implementation currently supports:
+
+- bounded gNB transmit-power control;
+- physical deep-sleep state;
+- restoration to active operation.
+
+Bandwidth, carrier-count, MIMO-reduction, BWP, Micro-DTX, and RF-chain/light-sleep requests are retained in control and telemetry state. Where Simu5G 1.4.1 does not expose an equivalent runtime PHY mutation, replies and telemetry distinguish the requested state from the fixed physical bandwidth/carrier state.
+
+An acknowledgement contains fields such as:
+
+```json
+{
+  "accepted": true,
+  "applied_count": 1,
+  "bs_id": "1001",
+  "cell_index": 0,
+  "tx_power_dbm": 41.0,
+  "physical_tx_power_dbm": 41.0,
+  "radio_sleeping": false,
+  "physical_bandwidth_mhz": 20.0,
+  "physical_carrier_count": 1,
+  "es_mode": "active",
+  "es_mode_physically_applied": true
+}
+```
+
+## Telemetry and Energy Accounting
+
+`TwinMetricsAgent` publishes one snapshot containing all 30 cells. Important fields include:
+
+- physical and logical simulation time;
+- BS and cell index;
+- zone, gNB type, RU profile, carrier and antenna metadata;
+- available and mean used PRBs;
+- normalized load and PRB utilization;
+- generated and delivered traffic;
+- active UE count;
+- SINR, latency, packet loss, and spectral efficiency;
+- requested and physical transmit power;
+- radio sleeping state and six ES-mode flags;
+- interval power and energy;
+- represented interval and represented energy;
+- data energy efficiency;
+- traffic level and traffic multiplier.
+
+Mean used PRBs may be fractional because allocation is averaged across TTIs in the reporting interval. This is more accurate than rounding every interval to an integer before calculating utilization.
+
+The current energy source is explicitly labelled `analytical_load_model`; it must not be described as a direct commercial power-meter measurement.
+
+## Keras Prediction Improvements
+
+The Prediction Agent now:
+
+- receives complete Simu5G cell snapshots;
+- maps runtime telemetry to the trained Farzi-team ANN schema;
+- assigns one of 30 validated hardware profiles to each gNB;
+- performs one 30-cell Keras batch during normal operation;
+- reports MC-dropout confidence/uncertainty;
+- discards stale snapshots;
+- preserves request and simulation-time identifiers;
+- provides optional live Kernel SHAP explanations.
+
+Observed 30-cell prediction batches completed in approximately 0.4-0.5 seconds on the development laptop. This observation replaces the earlier synthetic throughput claims above and is not a platform-independent guarantee.
+
+## SHAP Explainability
+
+### Offline model-level SHAP
+
+`generate_shap_plots.py` generates seeded, reproducible Kernel SHAP explanations for the saved Keras ANN. The validated paper run used:
+
+```text
+24 explained samples
+100 sampled background records
+45 transformed ANN features
+seed 42
+```
+
+These plots explain general ANN behavior on a stratified modelling cohort. They do not compare AI control with deterministic control.
+
+### Live Simu5G SHAP validation
+
+Live SHAP was also enabled for a short Simu5G-only smoke test using:
+
+```yaml
+features:
+  use_shap: true
+  shap_batch_size: 30
+```
+
+Two complete 30-cell runtime batches were successfully explained. Both batches consistently ranked RU type, load spline, antenna count, smoothed load, lagged load, and transmit power among the strongest ANN drivers.
+
+Live SHAP explains real-time Simu5G samples, while its reference distribution still comes from `merged_training_data.csv`. The current live initializer reads the first 100 modelling rows and uses a 50-row subset for Kernel SHAP, producing a reference prediction near 66.53 W in the smoke test. This validates integration but is less representative than the seeded offline background.
+
+Live Kernel SHAP takes roughly 2-3 minutes per 30-cell snapshot and disables normal batch acceleration. It should therefore remain disabled during KPI experiments:
+
+```yaml
+features:
+  use_shap: false
+  shap_batch_size: 30
+```
+
+For future scenario-specific SHAP, matched AI and deterministic Simu5G observations should be explained offline against one common background. Different scenario-specific backgrounds must not be used because their SHAP values would not be directly comparable.
+
+### SHAP interpretation cautions
+
+- SHAP explains the Keras predictor, not the LLM, rule engine, or whole multi-agent system.
+- RU type and operating mode are categorical codes and have no ordinal high/low meaning.
+- Lag, smoothed-load, and spline features are correlated transformations of traffic load and should be discussed as a load-feature family.
+- A SHAP contribution is a model attribution relative to a background, not proof of physical causality.
+
+## Experiment Collection and Analysis
+
+`experiment_metrics_collector.py` records scenario-labelled telemetry as cell CSV and raw JSONL files. Each row includes scenario, run ID, replicate, seed, timestamps, cell identity, KPI source, energy source, radio metrics, energy fields, and ES mode.
+
+`analyze_experiments.py` generates:
+
+- `kpi_comparison.png`;
+- `hourly_profiles.png`;
+- `es_modes_by_traffic.png`;
+- `energy_throughput_tradeoff.png`;
+- `run_summary.csv`;
+- `scenario_summary.csv`;
+- `paired_comparison.csv`;
+- `formula_metadata.json`.
+
+The final pilot comparison uses only common `(physical_sim_time_s, BS)` observations. The unmatched first AI snapshot was removed so one scenario could not gain or lose represented energy merely because its collector started earlier.
+
+## KPI Definitions
+
+### Represented energy
+
+```text
+represented energy (kWh)
+  = sum(represented_energy_j) / 3,600,000
+```
+
+### Average network power
+
+```text
+average network power (W)
+  = total represented energy (J) / represented duration (s)
+```
+
+### Network throughput
+
+```text
+network throughput (Mbit/s)
+  = represented received bits / represented duration / 1,000,000
+```
+
+### Data energy efficiency
+
+```text
+energy efficiency (Mbit/J)
+  = represented received data volume (Mbit)
+    / represented energy consumption (J)
+```
+
+This follows the 3GPP TS 28.554 form of data volume divided by energy consumption over the same period.
+
+### Aggregate packet loss
+
+```text
+packet loss (%)
+  = 100 * max(0, offered bits - received bits) / offered bits
+```
+
+### Traffic-weighted latency
+
+```text
+traffic-weighted latency (ms)
+  = sum(cell latency * represented received bits)
+    / sum(represented received bits)
+```
+
+### Time-weighted PRB utilization
+
+```text
+PRB utilization (%)
+  = 100 * sum(used PRBs * represented interval)
+    / sum(available PRBs * represented interval)
+```
+
+This is a time-weighted aggregation of Simu5G counters aligned with the used-to-available PRB relationship described by 3GPP TS 28.552.
+
+## Validated Matched Pilot Results
+
+The final matched seed-42 comparison contains:
+
+```text
+57 common snapshots per scenario
+30 cells per snapshot
+1,710 cell observations per scenario
+physical simulation time 4-60 seconds
+90 associated UEs
+0 unassociated UEs
+```
+
+| KPI | Deterministic | AI | Observed change |
+|---|---:|---:|---:|
+| Represented energy | 54.3601 kWh | 50.5842 kWh | **-6.946%** |
+| Average network power | 2384.21 W | 2218.60 W | -6.946% |
+| Average network throughput | 66.9394 Mbit/s | 66.9356 Mbit/s | **-0.006%** |
+| Energy efficiency | 0.028076 Mbit/J | 0.030170 Mbit/J | approximately +7.46% |
+| Traffic-weighted latency | 2.933 ms | 3.934 ms | approximately +34.1% |
+| Aggregate packet loss | 0.000629% | 0.006290% | +0.005661 percentage points |
+| Weighted PRB utilization | 2.458% | 3.332% | approximately +35.5% |
+| Average associated UEs | 90 | 90 | unchanged |
+| Full sleeping cell-time | 2.749% | 3.099% | +0.350 percentage points |
+
+The validated energy result replaces the earlier projected `12-18%` system-wide saving shown above. The current evidence supports **6.946% energy saving for one matched seed**, not a generalized saving range.
+
+### Energy saving by traffic level
+
+| Traffic condition | AI saving relative to deterministic |
+|---|---:|
+| Very low | 8.558% |
+| Low | 3.444% |
+| Medium | 3.191% |
+| Peak | 5.562% |
+
+### Applied ES-mode distribution
+
+| Scenario | Active | Light sleep | Full sleep |
+|---|---:|---:|---:|
+| AI | 70 | 1,587 | 53 |
+| Deterministic | 211 | 1,452 | 47 |
+
+The AI controller spent more represented cell-time in light sleep and less time fully active. All low, medium, and peak AI observations used light sleep; active and full-sleep observations occurred during very-low traffic.
+
+## Correct Interpretation of the Result
+
+For seed 42, AI control achieved a favorable energy-throughput trade-off:
+
+```text
+6.946% lower represented energy
+0.006% lower aggregate throughput
+approximately 7.46% higher data energy efficiency
+```
+
+The improvement was not free. AI also increased latency, packet loss, and PRB utilization. The likely interpretation is that AI consolidated operation and used active radio resources more intensively. The paper must report these QoS trade-offs rather than claiming that every KPI improved.
+
+## Reproduction Commands
+
+### Python agents
+
+Run from `CODE/` in separate terminals as required by the selected mode:
+
+```bash
+python -u OrchestrationAgent.py
+python -u feedbackAGENT.py config/agentCONFIG.yaml
+python -u OptimizationAgentwzmq.py --mode ai_based --seed 42
+python -u newPredictionAgent.py --config config/prediction_agent_config.yaml
+```
+
+For deterministic control:
+
+```bash
+python -u OptimizationAgentwzmq.py --mode rule_based --seed 42
+```
+
+Feedback Agent and LLM plan generation are not required for deterministic decision selection.
+
+### Simu5G command-line run
+
+Run from the OMNeT++ environment:
+
+```bash
+cd ~/default_workspace/auto-easoran-sim
+
+./auto-easoran-sim -u Cmdenv \
+-n "ned:/home/opp_env/default_workspace/inet-4.5.4/src:/home/opp_env/default_workspace/simu5g-1.4.1/src" \
+-c General \
+--seed-set=42 \
+--sim-time-limit=60s \
+omnetpp.ini
+```
+
+### Qtenv topology visualization
+
+```bash
+./auto-easoran-sim -u Qtenv \
+-n "ned:/home/opp_env/default_workspace/inet-4.5.4/src:/home/opp_env/default_workspace/simu5g-1.4.1/src" \
+-c General \
+--seed-set=42 \
+--sim-time-limit=1s \
+omnetpp.ini
+```
+
+### Matched KPI analysis
+
+```bash
+python -u analyze_experiments.py \
+  --input-dir ../OUTPUTs/experiments/paired_seed42_final_matched \
+  --output-dir ../OUTPUTs/experiments/analysis_seed42_final_matched
+```
+
+### Reproducible offline SHAP
+
+```bash
+python -u generate_shap_plots.py \
+  --data ../archive/merged_training_data.csv \
+  --output-dir ../OUTPUTs/shap/paper_seed42_final \
+  --samples 24 \
+  --background-samples 100 \
+  --seed 42
+```
+
+## Reliability Improvements
+
+The validated implementation includes:
+
+- bounded draining of prediction messages to reduce backlog;
+- non-blocking feedback/status polling;
+- REQ-socket recreation after orchestration timeout or protocol failure;
+- active-UE protection against unsafe deep sleep;
+- physical feasibility constraints for candidate ES modes;
+- minimum predicted-saving deployment threshold;
+- bounded LLM healing-plan count;
+- stale-snapshot rejection;
+- requested-versus-physical state reporting;
+- matched-window analysis to eliminate collector-start bias;
+- explicit KPI and energy-source metadata;
+- offline SHAP generation to avoid disturbing KPI experiments.
+
+## Current Limitations
+
+- The headline comparison uses one seed and one replicate per scenario.
+- Confidence intervals are zero in the single-run summary and must not be interpreted as low variability.
+- At least five matched seeds are required before statistical generalization.
+- The energy calculation is an analytical model driven by runtime Simu5G state.
+- Some requested ES modes do not have a direct mutable Simu5G 1.4.1 PHY equivalent.
+- Live Kernel SHAP is synchronous and too expensive for normal closed-loop experiments.
+- The current offline SHAP cohort explains the ANN, not the LLM or deterministic rules.
+- Scenario-specific AI-versus-deterministic SHAP still requires matched runtime samples and one common background.
+- The 30-gNB topology is the validated laptop-scale configuration; larger deployments require a separate scalability study.
+
+## Valid and Invalid Research Claims
+
+### Supported by the current pilot
+
+- A genuine 30-gNB, 90-UE Simu5G topology was integrated with the agents.
+- Real runtime telemetry drives Keras prediction and controller decisions.
+- Supported power and sleep commands are physically applied to the target Simu5G gNB PHY.
+- Deterministic and AI scenarios were compared over one matched logical-day run.
+- AI saved 6.946% represented energy with a -0.006% throughput change for seed 42.
+- AI improved aggregate data energy efficiency while increasing latency, loss, and PRB utilization.
+- Both offline and live ANN SHAP generation were validated.
+
+### Not yet supported
+
+- The result is statistically significant or generalizes to all seeds.
+- AI improves every KPI.
+- The observed saving applies to real commercial networks without calibration.
+- A candidate mode skipped by the benefit guard is universally ineffective.
+- SHAP explains the LLM, policy engine, or complete multi-agent system.
+- Earlier projected performance values above are validated measurements of the current implementation.
+
+## Paper-Ready Pilot Summary
+
+> A 30-gNB, 90-UE Simu5G testbed was integrated with a multi-agent RAN energy-control pipeline and evaluated over a compressed 24-hour traffic cycle. In the matched seed-42 pilot, AI-based control reduced represented energy from 54.36 kWh to 50.58 kWh, corresponding to a 6.95% saving, while aggregate throughput changed by only -0.006%. Data energy efficiency improved by approximately 7.46%. The energy improvement was accompanied by higher traffic-weighted latency, packet loss, and PRB utilization, demonstrating a measurable energy-QoS trade-off. Kernel SHAP analysis identified radio-unit class, traffic-load history, antenna configuration, and transmit power as influential ANN energy-prediction features. These results establish end-to-end feasibility but remain single-seed evidence pending multi-seed statistical validation.
+
+## Updated Documentation Date
+
+This implementation update was added on **28 June 2026**. Detailed result notes and formulas are also maintained in `RESULTS_README.md`.
