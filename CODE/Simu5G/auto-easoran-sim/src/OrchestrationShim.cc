@@ -1,14 +1,87 @@
 #include "OrchestrationShim.h"
+#include "ControllableGnbPhy.h"
 #include "ShimRegistry.h"
 
 #include <zmq.h>
 #include <sstream>
 #include <algorithm>
 #include <ctime>
+#include <cctype>
 
 using namespace omnetpp;
 
 Define_Module(OrchestrationShim);
+ControllableGnbPhy*
+OrchestrationShim::resolveGnbPhy(
+    const std::string& bsId,
+    int& cellIndex
+) {
+    cellIndex = -1;
+
+    std::size_t consumedCharacters = 0;
+    int numericBsId = 0;
+
+    try {
+        numericBsId = std::stoi(
+            bsId,
+            &consumedCharacters
+        );
+    }
+    catch (...) {
+        return nullptr;
+    }
+
+    if (consumedCharacters != bsId.size()) {
+        return nullptr;
+    }
+
+    // External IDs 1001..1030 map to gnb[0]..gnb[29].
+    cellIndex = numericBsId - 1001;
+
+    cModule* network =
+        getParentModule();
+
+    if (network == nullptr) {
+        cellIndex = -1;
+        return nullptr;
+    }
+
+    const int numberOfGnbs =
+        network->getSubmoduleVectorSize(
+            "gnb"
+        );
+
+    if (cellIndex < 0 ||
+        cellIndex >= numberOfGnbs) {
+
+        cellIndex = -1;
+        return nullptr;
+    }
+
+    cModule* gnb =
+        network->getSubmodule(
+            "gnb",
+            cellIndex
+        );
+
+    cModule* cellularNic =
+        gnb != nullptr
+            ? gnb->getSubmodule(
+                "cellularNic"
+            )
+            : nullptr;
+
+    cModule* phyModule =
+        cellularNic != nullptr
+            ? cellularNic->getSubmodule(
+                "phy"
+            )
+            : nullptr;
+
+    return dynamic_cast<
+        ControllableGnbPhy*
+    >(phyModule);
+}
 
 void OrchestrationShim::initialize() {
     repBind       = par("repBind").stdstringValue();
@@ -16,7 +89,7 @@ void OrchestrationShim::initialize() {
     echoToLog     = par("echoToLog").boolValue();
 
     tick = new cMessage("poll");
-    scheduleAt(simTime() + 0.2, tick);
+    scheduleAt(simTime() + 0.05, tick);
 }
 
 void OrchestrationShim::ensureSockets() {
@@ -51,68 +124,354 @@ void OrchestrationShim::publishStatus(const std::string& event, const std::strin
     zmq_msg_close(&msg);
 }
 
-std::string OrchestrationShim::applyPlan(const std::string& req) {
-    // Minimal JSON scanning: look for "bs_id", "delta_tx_db", "tx_power_dbm", "es_mode"
-    size_t pos = 0;
-    int applied = 0;
+std::string OrchestrationShim::applyPlan(
+    const std::string& request
+) {
+    auto readNumber = [&request](
+        const std::string& key,
+        double& output
+    ) -> bool {
+        const std::string token = "\"" + key + "\"";
+        const auto keyPos = request.find(token);
 
-    while (true) {
-        auto b = req.find("\"bs_id\"", pos);
-        if (b == std::string::npos) break;
+        if (keyPos == std::string::npos)
+            return false;
 
-        auto c  = req.find(':', b);
-        auto q1 = req.find('"', c + 1);
-        auto q2 = req.find('"', q1 + 1);
-        if (q1 == std::string::npos || q2 == std::string::npos) break;
-        std::string bsid = req.substr(q1 + 1, q2 - q1 - 1);
+        const auto colonPos = request.find(':', keyPos);
+        if (colonPos == std::string::npos)
+            return false;
 
-        ShimRegistry::BsConfig cfg;
-        ShimRegistry::instance().getConfig(bsid, cfg);
+        const auto endPos = request.find_first_of(
+            ",}", colonPos + 1
+        );
 
-        // delta_tx_db (number)
-        auto dpos = req.find("\"delta_tx_db\"", q2);
-        if (dpos != std::string::npos) {
-            auto dc = req.find(':', dpos);
-            auto de = req.find_first_of(",}", dc + 1);
-            std::string delta = req.substr(dc + 1, de - dc - 1);
-            delta.erase(std::remove_if(delta.begin(), delta.end(), ::isspace), delta.end());
-            try { cfg.txPowerDbm += std::stod(delta); } catch (...) {}
+        std::string value = request.substr(
+            colonPos + 1,
+            endPos - colonPos - 1
+        );
+
+        value.erase(
+            std::remove_if(
+                value.begin(),
+                value.end(),
+                ::isspace
+            ),
+            value.end()
+        );
+
+        try {
+            output = std::stod(value);
+            return true;
+        }
+        catch (...) {
+            return false;
+        }
+    };
+
+    auto readString = [&request](
+        const std::string& key,
+        std::string& output
+    ) -> bool {
+        const std::string token = "\"" + key + "\"";
+        const auto keyPos = request.find(token);
+
+        if (keyPos == std::string::npos)
+            return false;
+
+        const auto colonPos = request.find(':', keyPos);
+        const auto quoteStart = request.find(
+            '"', colonPos + 1
+        );
+        const auto quoteEnd = request.find(
+            '"', quoteStart + 1
+        );
+
+        if (
+            colonPos == std::string::npos ||
+            quoteStart == std::string::npos ||
+            quoteEnd == std::string::npos
+        ) {
+            return false;
         }
 
-        // tx_power_dbm (number)
-        auto tpos = req.find("\"tx_power_dbm\"", q2);
-        if (tpos != std::string::npos) {
-            auto tc = req.find(':', tpos);
-            auto te = req.find_first_of(",}", tc + 1);
-            std::string val = req.substr(tc + 1, te - tc - 1);
-            val.erase(std::remove_if(val.begin(), val.end(), ::isspace), val.end());
-            try { cfg.txPowerDbm = std::stod(val); } catch (...) {}
+        output = request.substr(
+            quoteStart + 1,
+            quoteEnd - quoteStart - 1
+        );
+
+        return true;
+    };
+
+    auto readEsModes = [&request](
+        std::array<int, 6>& output
+    ) -> bool {
+        const auto keyPos = request.find("\"es_modes\"");
+
+        if (keyPos == std::string::npos)
+            return false;
+
+        const auto arrayStart = request.find('[', keyPos);
+        const auto arrayEnd = request.find(']', arrayStart);
+
+        if (
+            arrayStart == std::string::npos ||
+            arrayEnd == std::string::npos
+        ) {
+            return false;
         }
 
-        // es_mode (string)
-        auto epos = req.find("\"es_mode\"", q2);
-        if (epos != std::string::npos) {
-            auto ec  = req.find(':', epos);
-            auto eq1 = req.find('"', ec + 1);
-            auto eq2 = req.find('"', eq1 + 1);
-            if (eq1 != std::string::npos && eq2 != std::string::npos)
-                cfg.esMode = req.substr(eq1 + 1, eq2 - eq1 - 1);
+        const std::string arrayText = request.substr(
+            arrayStart + 1,
+            arrayEnd - arrayStart - 1
+        );
+
+        std::stringstream stream(arrayText);
+        std::string item;
+        int index = 0;
+
+        while (
+            std::getline(stream, item, ',') &&
+            index < 6
+        ) {
+            try {
+                output[index] = (
+                    std::stoi(item) != 0 ? 1 : 0
+                );
+            }
+            catch (...) {
+                output[index] = 0;
+            }
+
+            index++;
         }
 
-        ShimRegistry::instance().setConfig(bsid, cfg);
-        applied++;
-        pos = q2 + 1;
+        return index == 6;
+    };
+
+    std::string bsId;
+
+    if (!readString("bs_id", bsId) || bsId.empty()) {
+        std::stringstream reply;
+        reply
+            << "{"
+            << "\"accepted\":false,"
+            << "\"applied_count\":0,"
+            << "\"error\":\"missing_or_invalid_bs_id\","
+            << "\"applied_at_sim_s\":"
+            << simTime().dbl()
+            << "}";
+
+        publishStatus(
+            "action/rejected",
+            reply.str()
+        );
+
+        return reply.str();
     }
 
-    std::stringstream rep;
-    rep << "{"
+        int cellIndex = -1;
+
+    ControllableGnbPhy* gnbPhy =
+        resolveGnbPhy(
+            bsId,
+            cellIndex
+        );
+
+    if (gnbPhy == nullptr) {
+        std::stringstream reply;
+
+        reply
+            << "{"
+            << "\"accepted\":false,"
+            << "\"applied_count\":0,"
+            << "\"bs_id\":\"" << bsId << "\","
+            << "\"error\":\"gnb_phy_not_found\","
+            << "\"applied_at_sim_s\":"
+            << simTime().dbl()
+            << "}";
+
+        publishStatus(
+            "action/rejected",
+            reply.str()
+        );
+
+        return reply.str();
+    }
+
+    ShimRegistry::BsConfig config;
+
+    const bool existingConfiguration =
+        ShimRegistry::instance().getConfig(
+            bsId,
+            config
+        );
+
+    if (!existingConfiguration) {
+        config.txPowerDbm =
+            gnbPhy->getConfiguredTxPowerDbm();
+
+        config.bandwidthMhz = 20.0;
+        config.carrierCount = 1;
+        config.esMode = "active";
+        config.esModes = {0, 0, 0, 0, 0, 0};
+    }
+
+    double numericValue = 0.0;
+
+    if (readNumber("delta_tx_db", numericValue)) {
+        config.txPowerDbm += numericValue;
+    }
+
+    if (readNumber("tx_power_dbm", numericValue)) {
+        config.txPowerDbm = numericValue;
+    }
+
+    if (readNumber("bandwidth_mhz", numericValue)) {
+        config.bandwidthMhz = numericValue;
+    }
+
+    if (readNumber("carrier_count", numericValue)) {
+        config.carrierCount = static_cast<int>(
+            numericValue
+        );
+    }
+
+    std::string stringValue;
+
+    if (readString("es_mode", stringValue)) {
+        config.esMode = stringValue;
+    }
+
+    const bool flagsProvided = readEsModes(
+        config.esModes
+    );
+
+    // Derive flags when only a named ES mode was supplied.
+    if (!flagsProvided) {
+        config.esModes = {0, 0, 0, 0, 0, 0};
+
+        if (config.esMode == "sleep") {
+            config.esModes[0] = 1;
+        }
+        else if (config.esMode == "carrier_off") {
+            config.esModes[1] = 1;
+        }
+        else if (config.esMode == "mimo_reduce") {
+            config.esModes[2] = 1;
+        }
+        else if (config.esMode == "micro_dtx") {
+            config.esModes[3] = 1;
+        }
+        else if (config.esMode == "bwp_adaptation") {
+            config.esModes[4] = 1;
+        }
+        else if (
+            config.esMode == "rf_chain_sleep" ||
+            config.esMode == "light_sleep"
+        ) {
+            config.esModes[5] = 1;
+        }
+    }
+
+    // Defensive bounds.
+    config.txPowerDbm = std::clamp(
+        config.txPowerDbm,
+        5.0,
+        43.0
+    );
+
+    if (config.bandwidthMhz > 0.0) {
+        config.bandwidthMhz = std::clamp(
+            config.bandwidthMhz,
+            5.0,
+            100.0
+        );
+    }
+
+    config.carrierCount = std::clamp(
+        config.carrierCount,
+        1,
+        4
+    );
+        // Apply supported controls to the real Simu5G PHY.
+    gnbPhy->setConfiguredTxPowerDbm(
+        config.txPowerDbm
+    );
+
+    const bool deepSleepRequested =
+        config.esMode == "sleep" ||
+        config.esModes[0] == 1;
+
+    gnbPhy->setRadioSleeping(
+        deepSleepRequested
+    );
+
+    ShimRegistry::instance().setConfig(
+        bsId,
+        config
+    );
+
+        std::stringstream reply;
+
+    const bool esModePhysicallyApplied =
+        config.esMode == "active" ||
+        config.esMode == "normal" ||
+        config.esMode == "sleep";
+
+    reply
+        << "{"
         << "\"accepted\":true,"
-        << "\"applied_count\":" << applied << ","
-        << "\"applied_at_sim_s\":" << simTime().dbl()
+        << "\"applied_count\":1,"
+        << "\"bs_id\":\"" << bsId << "\","
+        << "\"cell_index\":" << cellIndex << ","
+        << "\"tx_power_dbm\":"
+        << config.txPowerDbm << ","
+        << "\"physical_tx_power_dbm\":"
+        << (
+            deepSleepRequested
+                ? -200.0
+                : config.txPowerDbm
+        )
+        << ","
+        << "\"radio_sleeping\":"
+        << (
+            deepSleepRequested
+                ? "true"
+                : "false"
+        )
+        << ","
+        << "\"requested_bandwidth_mhz\":"
+        << config.bandwidthMhz << ","
+        << "\"physical_bandwidth_mhz\":20.0,"
+        << "\"requested_carrier_count\":"
+        << config.carrierCount << ","
+        << "\"physical_carrier_count\":1,"
+        << "\"es_mode\":\""
+        << config.esMode << "\","
+        << "\"es_mode_physically_applied\":"
+        << (
+            esModePhysicallyApplied
+                ? "true"
+                : "false"
+        )
+        << ","
+        << "\"energy_mode_model\":\""
+        << (
+            esModePhysicallyApplied
+                ? "simu5g_phy_and_energy_model"
+                : "analytical_energy_model_only"
+        )
+        << "\","
+        << "\"applied_at_sim_s\":"
+        << simTime().dbl()
         << "}";
 
-    publishStatus("action/applied", rep.str());
-    return rep.str();
+    publishStatus(
+        "action/applied",
+        reply.str()
+    );
+
+    return reply.str();
 }
 
 void OrchestrationShim::pollOnce() {
@@ -140,7 +499,7 @@ void OrchestrationShim::pollOnce() {
 void OrchestrationShim::handleMessage(cMessage* msg) {
     if (msg == tick) {
         try { pollOnce(); } catch (...) {}
-        scheduleAt(simTime() + 0.2, tick);
+        scheduleAt(simTime() + 0.05, tick);
     }
 }
 
