@@ -115,7 +115,7 @@ class ValidationEngine:
             "active": 0.0,
             "normal": 0.0,
             "sleep": 15.0,
-            "light_sleep": 5.0,
+            "light_sleep": 1.0,
             "carrier_off": 1.0,
             "mimo_reduce": 1.5,
             "micro_dtx": 2.0,
@@ -128,12 +128,12 @@ class ValidationEngine:
             "normal": 1.00,
             "sleep": 0.15,
             "deep_sleep": 0.15,
-            "light_sleep": 0.90,
-            "rf_chain_sleep": 0.90,
+            "light_sleep": 0.95,
+            "rf_chain_sleep": 0.99,
             "carrier_off": 0.80,
-            "mimo_reduce": 0.90,
+            "mimo_reduce": 0.95,
             "micro_dtx": 0.95,
-            "bwp_adaptation": 0.90,
+            "bwp_adaptation": 0.95,
         }.get(es_mode, 1.00)
 
         tx_reduction_db = max(
