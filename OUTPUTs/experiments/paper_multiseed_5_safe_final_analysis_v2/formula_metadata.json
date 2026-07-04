@@ -1,0 +1,16 @@
+{
+  "represented_energy_kwh": "sum(represented_energy_j) / 3.6e6",
+  "average_network_power_w": "total represented energy / represented run duration",
+  "average_network_throughput_mbps": "represented received bits / represented run duration / 1e6",
+  "energy_efficiency_mbit_per_j": "represented received data volume in Mbit / represented energy in joules",
+  "aggregate_packet_loss_pct": "100 * max(0, offered bits - received bits) / offered bits",
+  "weighted_prb_utilization_pct": "100 * sum(used PRBs * represented interval) / sum(available PRBs * represented interval)",
+  "traffic_weighted_latency_ms": "mean cell latency weighted by represented received bits",
+  "sleeping_cell_time_pct": "100 * sleeping represented cell-time / total represented cell-time",
+  "standards_note": "3GPP TS 28.552 defines 5G performance measurements; TS 28.554 defines 5G KPIs. Energy efficiency uses data volume divided by energy consumption in bit/J.",
+  "references": [
+    "https://portal.3gpp.org/desktopmodules/Specifications/SpecificationDetails.aspx?specificationId=3413",
+    "https://www.3gpp.org/technologies/ee-article"
+  ],
+  "timestamp_alignment": "Retain only logical simulation timestamps present in every experiment run across all scenarios and seeds before calculating KPIs."
+}
