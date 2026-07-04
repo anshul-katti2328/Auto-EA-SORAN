@@ -330,7 +330,7 @@ def parse_arguments():
     parser.add_argument(
         "--scenario",
         required=True,
-        choices=["deterministic", "ai"],
+        choices=["no_control", "static_threshold", "deterministic", "ai"],
     )
     parser.add_argument(
         "--endpoint",
