@@ -8,7 +8,18 @@ agent:
   description: "Advanced optimization agent with NSGA-II, 3GPP policy parsing, and LLM integration"
 
 experiment:
-  # Valid values: "rule_based" or "ai_based"
+  static_threshold:
+    low_load_threshold: 0.10
+    medium_load_threshold: 0.35
+    low_load_tx_power_dbm: 25.0
+    medium_load_tx_power_dbm: 35.0
+    high_load_tx_power_dbm: 41.0
+
+  # Valid values:
+  #   "no_control"        -> monitoring only, no configuration is applied
+  #   "static_threshold"  -> simple operator threshold baseline
+  #   "rule_based"        -> deterministic expert policy controller
+  #   "ai_based"          -> LLM/feedback safety-gated AI controller
   mode: "rule_based"
 
   # Make one control decision per BS every 15 simulated minutes.
@@ -34,13 +45,14 @@ optimization:
   # Base QoS Constraints (can be dynamically updated by 3GPP policies)
   constraints:
     min_throughput: 50.0              # Minimum throughput in Mbps
-    max_latency: 20.0                 # Maximum latency in ms
-    max_packet_loss: 0.01             # Maximum packet loss rate (1%)
+    max_latency: 5.0                  # Maximum latency in ms
+    max_packet_loss: 0.001            # Maximum packet loss rate (0.1%)
     max_tx_power: 43.0                # Maximum transmission power in dBm
 
   # Optimization bounds for 5G parameters
   bounds:
-    tx_power_range: [5.0, 43.0]       # TX power range in dBm
+    tx_power_range: [18.0, 43.0]       # TX power range in dBm
+    max_tx_power_step_db: 3.0         # Safe maximum reduction per accepted step
     bandwidth_options: [20]           # Physical topology currently uses one 20 MHz carrier
     carrier_count_range: [1]          # Prevent proposals that Simu5G cannot physically apply
     energy_saving_modes: 6            # Number of energy saving modes
