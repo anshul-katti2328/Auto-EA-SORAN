@@ -24,12 +24,12 @@ communication:
 validation:
   timeout: 300
   max_tx_power_dbm: 43.0
-  min_tx_power_dbm: 5.0
-  max_latency_ms: 20.0
-  max_packet_loss_pct: 1.0
+  min_tx_power_dbm: 18.0
+  max_latency_ms: 5.0
+  max_packet_loss_pct: 0.1
   min_throughput_mbps: 1.0
-  min_throughput_retention: 0.80
-  min_confidence: 0.50
+  min_throughput_retention: 0.95
+  min_confidence: 0.70
 
 monitoring:
   check_interval: 10
