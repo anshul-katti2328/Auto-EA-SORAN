@@ -4,3 +4,4 @@ CODE/.venv/shap_plots/unknown
 venv_fresh/
 archive/
 .env
+*.log
