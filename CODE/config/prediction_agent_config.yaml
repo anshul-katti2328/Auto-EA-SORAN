@@ -17,5 +17,5 @@ features:
   # SHAP implementation (complex) : Set this as true when running in SHAP mode. While SHAP
   # helps capture complex feature interactions, it significantly increases computation time
   # and memory usage. For standard energy prediction tasks without SHAP, set to false.
-  use_shap: true 
+  use_shap: false 
   shap_batch_size: 30
