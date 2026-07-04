@@ -1,5 +1,11 @@
 # Auto-EASORAN Experiment Results and Paper Notes
 
+> **Definitive-results notice (4 July 2026):** Section 15 contains the
+> final four-scenario, five-seed, safety-constrained evaluation and
+> supersedes the single-seed pilot values in Sections 4-14. The pilot
+> material is retained to document the development path and must not be
+> cited as the final paper result.
+
 ## 1. Purpose of this document
 
 This document records the current experimental implementation, the results obtained from the matched deterministic and AI runs, the formulas used to calculate each KPI, and the correct interpretation of the generated figures. It is intended to give every project member a common, reproducible source of values for the research paper.
@@ -457,3 +463,203 @@ python -u generate_shap_plots.py \
 ## 14. Short paper-ready summary
 
 > A 30-gNB, 90-UE Simu5G testbed was used to compare deterministic and autonomous AI-based RAN energy control over a compressed 24-hour traffic cycle. In the matched seed-42 pilot, the AI controller reduced represented energy consumption from 54.36 kWh to 50.58 kWh, corresponding to a 6.95% saving, while aggregate throughput changed by only -0.006%. Data energy efficiency improved by approximately 7.46%. The energy gain was accompanied by increased traffic-weighted latency, packet loss, and PRB utilization, demonstrating a measurable energy/QoS trade-off. Kernel SHAP analysis of the Keras energy predictor identified radio-unit type, smoothed load, transmit power, bandwidth, and energy-saving state as the most influential prediction features. These results establish end-to-end feasibility but remain a single-seed pilot pending multi-seed statistical validation.
+
+## 15. Definitive five-seed paper evaluation
+
+### 15.1 Authoritative data and controller versions
+
+The final paper-facing raw and analysed datasets are:
+
+```text
+OUTPUTs/experiments/paper_multiseed_5_safe_final_raw_v1/
+OUTPUTs/experiments/paper_multiseed_5_safe_final_analysis_v2/
+```
+
+The raw directory contains 20 experiment runs: four scenarios for each
+of five seeds (`42`, `43`, `44`, `45`, and `46`). It also contains a
+SHA-256 manifest so the evaluation inputs can be checked for accidental
+modification.
+
+The four evaluated scenarios are:
+
+1. `no_control` -- monitoring without energy-control actions;
+2. `static_threshold` -- a simple operator-threshold baseline;
+3. `deterministic` -- the complete expert rule-based controller;
+4. `ai` -- the final safety-constrained AI closed loop.
+
+All AI runs in the definitive set use the same final controller. Earlier
+`qos_regression` directories contain tuning experiments and are excluded
+from the statistical evaluation.
+
+### 15.2 Matching and sample size
+
+Global timestamp alignment retains only timestamps present in every run
+across every scenario and seed:
+
+```text
+57 common timestamps per run
+logical time 5760-86400 seconds
+30 cells per timestamp
+1,710 cell rows per run
+20 runs
+34,200 aligned cell rows
+```
+
+The independent experimental unit is the seed-level run, not an
+individual cell row. Statistical tests therefore use five paired effects
+per comparison and do not treat 34,200 correlated cell observations as
+independent replicates.
+
+### 15.3 Final safe-AI policy
+
+The final AI deployment path uses:
+
+- 18 dBm minimum transmit power;
+- a maximum 3 dB reduction per accepted power-control step;
+- safe-ramp continuation when load remains stable;
+- 5 ms maximum predicted latency;
+- 0.1% maximum predicted packet loss;
+- 95% minimum predicted throughput retention;
+- 0.70 minimum confidence;
+- active-UE protection against deep sleep;
+- Feedback Agent approval before orchestration.
+
+A tested 6 dB ramp reduced transmit power faster but exceeded the
+packet-loss limit. It was rejected during controller development and is
+not part of the final dataset.
+
+### 15.4 Scenario-level results
+
+Values are means across five aligned seeds. The reported uncertainty is
+the half-width of a two-sided 95% Student-t confidence interval.
+
+| Scenario | Energy (kWh) | Power (W) | Throughput (Mbit/s) | Efficiency (Mbit/J) | Latency (ms) | Packet loss (%) |
+|---|---:|---:|---:|---:|---:|---:|
+| No control | 96.9506 +/- 0.1877 | 4252.22 +/- 8.23 | 66.9211 +/- 0.0257 | 0.015738 +/- 0.000032 | 2.6243 +/- 0.0504 | 0.0000 |
+| Static threshold | 55.3593 +/- 0.6231 | 2428.04 +/- 27.33 | 66.9134 +/- 0.0212 | 0.027560 +/- 0.000302 | 3.0868 +/- 0.1642 | 0.01145 +/- 0.02895 |
+| Deterministic | **51.2008 +/- 0.3185** | **2245.65 +/- 13.97** | 66.9208 +/- 0.0259 | **0.029801 +/- 0.000184** | 2.8525 +/- 0.1161 | 0.00038 +/- 0.00033 |
+| Safe AI | 53.6076 +/- 0.8704 | 2351.21 +/- 38.18 | 66.9108 +/- 0.0241 | 0.028462 +/- 0.000453 | 3.0201 +/- 0.1768 | 0.01541 +/- 0.04148 |
+
+### 15.5 Paired controller effects
+
+| Comparison | Energy saving | Throughput change | Efficiency change | Latency change |
+|---|---:|---:|---:|---:|
+| AI vs no control | **44.706% +/- 0.917%** | -0.015% +/- 0.041% | **+80.850% +/- 3.004%** | +15.049% +/- 5.034% |
+| AI vs static threshold | **3.166% +/- 0.830%** | -0.004% +/- 0.013% | **+3.269% +/- 0.895%** | -2.162% +/- 2.137% |
+| AI vs deterministic | **-4.703% +/- 1.859%** | -0.015% +/- 0.042% | **-4.491% +/- 1.698%** | +5.846% +/- 2.558% |
+
+Positive energy saving denotes lower AI energy than the baseline. The
+negative AI-versus-deterministic result therefore means that safe AI
+used approximately 4.70% more energy.
+
+### 15.6 Statistical interpretation
+
+`statistical_tests.csv` contains:
+
+- two-sided paired t-tests implemented as one-sample tests of paired
+  seed-level effects against zero;
+- exact/automatic two-sided Wilcoxon signed-rank tests;
+- Holm-adjusted p-values within each KPI family;
+- Cohen's `dz` paired effect sizes;
+- Student-t confidence intervals.
+
+For energy saving, Holm-adjusted paired t-test results are:
+
+| Comparison | Mean effect | Holm-adjusted p | Cohen's dz |
+|---|---:|---:|---:|
+| AI vs no control | +44.706% | 5.36e-08 | 60.52 |
+| AI vs static threshold | +3.166% | 0.000898 | 4.74 |
+| AI vs deterministic | -4.703% | 0.00217 | -3.14 |
+
+Throughput differences are not significant after Holm correction.
+Packet-loss differences are also not significant. The paired t-tests
+support the energy and efficiency differences, but the exact Wilcoxon
+tests do not reach 0.05 because five pairs provide very coarse
+two-sided non-parametric resolution (the smallest unadjusted value for
+five same-direction non-zero pairs is 0.0625). Both test families must
+be reported rather than selectively citing only the significant one.
+
+The very large standardized effects partly reflect the highly controlled
+matched simulation. They must not be interpreted as real-network effect
+sizes without external validation.
+
+### 15.7 Applied AI modes
+
+Across all five aligned AI runs:
+
+| Applied mode | Cell snapshots | Share |
+|---|---:|---:|
+| Active | 896 | 10.48% |
+| Light sleep | 7,654 | 89.52% |
+| Full/deep sleep | 0 | 0.00% |
+
+The final AI controller reserves deep sleep because every simulated cell
+has active associated users. This is a safety result, not a failure to
+evaluate sleep candidates. `sleeping_cell_time_pct` therefore remains
+zero for final AI, while light sleep is reported separately.
+
+### 15.8 Definitive figures and tables
+
+The final analysis directory contains:
+
+- `kpi_comparison.png` -- four-scenario KPI means and t-intervals;
+- `hourly_profiles.png` -- logical-day power, traffic, PRB, and latency;
+- `es_modes_by_traffic.png` -- applied modes by traffic condition;
+- `energy_throughput_tradeoff.png` -- run-level energy/throughput space;
+- `paired_energy_savings_by_seed.png` -- seed effects and mean t-CIs;
+- `run_summary.csv`;
+- `scenario_summary.csv`;
+- `paired_comparison.csv`;
+- `paired_comparison_summary.csv`;
+- `statistical_tests.csv`;
+- `timestamp_alignment.csv`;
+- `formula_metadata.json`.
+
+### 15.9 Final claims for the paper
+
+Supported:
+
+- safe AI substantially reduces energy relative to no control;
+- safe AI improves on static-threshold control by approximately 3.17%;
+- throughput is preserved across the tested seeds;
+- final AI packet loss remains below the configured 0.1% run-level
+  limit and mean latency remains below 5 ms;
+- deterministic expert control remains approximately 4.70% more
+  energy-efficient than safe AI;
+- the architecture implements a physically connected, policy-gated AI
+  control loop rather than an offline recommendation-only workflow.
+
+Not supported:
+
+- AI universally outperforms a purpose-built deterministic controller;
+- five seeds prove deployment performance in commercial networks;
+- the analytical energy model is equivalent to hardware power metering;
+- SHAP explains the LLM, Feedback Agent, or complete control system;
+- light sleep is equivalent to physical full-radio shutdown.
+
+### 15.10 Final paper-ready summary
+
+> A four-scenario evaluation was conducted on a 30-gNB, 90-UE Simu5G
+> testbed using five matched random seeds and a compressed 24-hour
+> traffic cycle. Globally aligned observations showed that the final
+> safety-constrained AI controller reduced represented energy by
+> 44.71% relative to no control and by 3.17% relative to a static
+> threshold baseline, with no statistically significant throughput
+> change. The deterministic expert controller remained 4.70% more
+> energy-efficient than safe AI. AI maintained mean latency at 3.02 ms
+> and mean packet loss at 0.015%, within the configured safety limits.
+> Paired t-tests with Holm correction supported the observed energy
+> differences, while exact Wilcoxon tests remained underpowered at
+> five pairs. The results demonstrate safe adaptive closed-loop energy
+> control and quantify its trade-off against specialized deterministic
+> optimization.
+
+### 15.11 Reproduction command
+
+Run from `CODE/`:
+
+```bash
+python -u analyze_experiments.py \
+  --input-dir ../OUTPUTs/experiments/paper_multiseed_5_safe_final_raw_v1 \
+  --output-dir ../OUTPUTs/experiments/paper_multiseed_5_safe_final_analysis_v2
+```
