@@ -1683,12 +1683,15 @@ class OptimizationAgent:
         )
 
         if self.control_mode not in {
+            "no_control",
+            "static_threshold",
             "rule_based",
             "ai_based",
         }:
             raise ValueError(
-                "experiment.mode must be either "
-                "'rule_based' or 'ai_based'"
+                "experiment.mode must be one of "
+                "'no_control', 'static_threshold', "
+                "'rule_based', or 'ai_based'"
             )
 
         self.decision_interval_sim_seconds = float(
@@ -1714,6 +1717,10 @@ class OptimizationAgent:
         # Per-BS decision tracking
         self.last_decision_sim_time = {}
         self.last_decision_load = {}
+
+        # Tracks cells that still require gradual TX-power
+        # reduction toward the optimizer's configured lower bound.
+        self.ai_safe_ramp_pending = {}
 
         # AI plans waiting for FeedbackAgent approval
         self.pending_validated_plans = {}
@@ -2089,7 +2096,18 @@ class OptimizationAgent:
                         ),
                     }
 
-                if load_change < self.minimum_load_change:
+                continue_safe_ai_ramp = (
+                    self.control_mode == "ai_based"
+                    and self.ai_safe_ramp_pending.get(
+                        bs_id,
+                        False,
+                    )
+                )
+
+                if (
+                    load_change < self.minimum_load_change
+                    and not continue_safe_ai_ramp
+                ):
                     return {
                         "status": "cached",
                         "action": "insignificant_load_change",
@@ -2098,9 +2116,160 @@ class OptimizationAgent:
                         "load_change": load_change,
                     }
 
+                if continue_safe_ai_ramp:
+                    self.logger.info(
+                        "Continuing safe TX-power ramp for BS %s "
+                        "despite stable load",
+                        bs_id,
+                    )
+
             self.last_decision_sim_time[bs_id] = sim_time_s
             self.last_decision_load[bs_id] = load
+            # ==================================================
+            # NO-CONTROL BASELINE MODE
+            # ==================================================
+            if self.control_mode == "no_control":
+                self.logger.info(
+                    "No-control baseline: observed BS %s at %.1fs; "
+                    "no configuration applied",
+                    bs_id,
+                    sim_time_s,
+                )
 
+                return {
+                    "status": "processed",
+                    "action": "no_control_observation",
+                    "bs_id": bs_id,
+                    "request_id": request_id,
+                    "sim_time_s": sim_time_s,
+                    "decision": {
+                        "rule_name": "no_control",
+                        "reason": (
+                            "Baseline mode: network is monitored but "
+                            "no energy-saving action is applied."
+                        ),
+                        "tx_power": current_config.get("tx_power", 43.0),
+                        "bandwidth": current_config.get("bandwidth", 20),
+                        "carrier_count": current_config.get("carrier_count", 1),
+                        "es_mode": current_config.get("es_mode", "active"),
+                        "es_modes": current_config.get("es_modes", [0, 0, 0, 0, 0, 0]),
+                    },
+                }
+            # ==================================================
+            # STATIC THRESHOLD BASELINE MODE
+            # ==================================================
+            if self.control_mode == "static_threshold":
+                static_config = self.config.get(
+                    "experiment",
+                    {},
+                ).get(
+                    "static_threshold",
+                    {},
+                )
+
+                low_threshold = float(
+                    static_config.get("low_load_threshold", 0.10)
+                )
+                medium_threshold = float(
+                    static_config.get("medium_load_threshold", 0.35)
+                )
+
+                if load < low_threshold:
+                    tx_power_dbm = float(
+                        static_config.get("low_load_tx_power_dbm", 25.0)
+                    )
+                    es_mode = "light_sleep"
+                    es_modes = [0, 0, 0, 0, 0, 1]
+                    rule_name = "static_low_load_light_sleep"
+                elif load < medium_threshold:
+                    tx_power_dbm = float(
+                        static_config.get("medium_load_tx_power_dbm", 35.0)
+                    )
+                    es_mode = "active"
+                    es_modes = [0, 0, 0, 0, 0, 0]
+                    rule_name = "static_medium_load_reduced_power"
+                else:
+                    tx_power_dbm = float(
+                        static_config.get("high_load_tx_power_dbm", 41.0)
+                    )
+                    es_mode = "active"
+                    es_modes = [0, 0, 0, 0, 0, 0]
+                    rule_name = "static_high_load_active"
+
+                command = {
+                    "action": "applyConfiguration",
+                    "target": bs_id,
+                    "control_mode": "static_threshold",
+                    "request_id": request_id,
+                    "sim_time_s": sim_time_s,
+                    "param": {
+                        "bs_id": bs_id,
+                        "tx_power_dbm": tx_power_dbm,
+                        "bandwidth_mhz": int(
+                            current_config.get("bandwidth", 20)
+                        ),
+                        "carrier_count": int(
+                            current_config.get("carrier_count", 1)
+                        ),
+                        "es_mode": es_mode,
+                        "es_modes": es_modes,
+                    },
+                    "decision": {
+                        "rule_name": rule_name,
+                        "reason": (
+                            "Static baseline: fixed operator threshold "
+                            "based only on current load."
+                        ),
+                        "tx_power": tx_power_dbm,
+                        "bandwidth": int(
+                            current_config.get("bandwidth", 20)
+                        ),
+                        "carrier_count": int(
+                            current_config.get("carrier_count", 1)
+                        ),
+                        "es_mode": es_mode,
+                        "es_modes": es_modes,
+                    },
+                }
+
+                if self.orchestrator_interface is None:
+                    orchestration_result = {
+                        "status": "NOT_SENT",
+                        "detail": "OrchestrationAgent unavailable",
+                    }
+                else:
+                    orchestration_result = (
+                        self.orchestrator_interface.send_command(command)
+                    )
+
+                orchestration_status = orchestration_result.get(
+                    "status",
+                    "UNKNOWN",
+                )
+
+                result_status = (
+                    "processed"
+                    if orchestration_status == "OK"
+                    else "not_applied"
+                )
+
+                self.logger.info(
+                    "Static-threshold decision for BS %s: %s, "
+                    "ES=%s, TX=%.1fdBm",
+                    bs_id,
+                    rule_name,
+                    es_mode,
+                    tx_power_dbm,
+                )
+
+                return {
+                    "status": result_status,
+                    "action": "static_threshold_configuration",
+                    "bs_id": bs_id,
+                    "request_id": request_id,
+                    "decision": command["decision"],
+                    "orchestration_result": orchestration_result,
+                }
             # ==================================================
             # RULE-BASED / DETERMINISTIC MODE
             # ==================================================
@@ -2306,16 +2475,72 @@ class OptimizationAgent:
                     self.logger.warning(f"Failed to get prediction, using default: {prediction_response['error']}")
 
             # Initialize optimizer with policy-updated constraints
+            optimization_config = self.config.get(
+                "optimization",
+                {},
+            )
+
+            runtime_bounds = optimization_config.get(
+                "bounds",
+                {},
+            ).copy()
+
+            configured_tx_range = list(
+                runtime_bounds.get(
+                    "tx_power_range",
+                    [18.0, 43.0],
+                )
+            )
+
+            current_tx_power = float(
+                request.current_config.get(
+                    "tx_power_dbm",
+                    request.current_config.get(
+                        "tx_power",
+                        configured_tx_range[1],
+                    ),
+                )
+            )
+
+            max_tx_power_step_db = float(
+                runtime_bounds.get(
+                    "max_tx_power_step_db",
+                    3.0,
+                )
+            )
+
+            runtime_min_tx_power = max(
+                float(configured_tx_range[0]),
+                current_tx_power - max_tx_power_step_db,
+            )
+            configured_min_tx_power = float(
+                configured_tx_range[0]
+            )
+
+            self.ai_safe_ramp_pending[
+                request.bs_id
+            ] = (
+                runtime_min_tx_power
+                > configured_min_tx_power + 1e-9
+            )
+            runtime_bounds["tx_power_range"] = [
+                runtime_min_tx_power,
+                float(configured_tx_range[1]),
+            ]
+
+            self.logger.info(
+                "Safe TX search range for BS %s: "
+                "[%.1f, %.1f] dBm; current=%.1f dBm",
+                request.bs_id,
+                runtime_bounds["tx_power_range"][0],
+                runtime_bounds["tx_power_range"][1],
+                current_tx_power,
+            )
+
             self.optimizer = MultiObjectiveOptimizer(
                 self.qos_predictor,
                 updated_constraints,
-                self.config.get(
-                    "optimization",
-                    {},
-                ).get(
-                    "bounds",
-                    {},
-                ),
+                runtime_bounds,
             )
             
             # Perform multi-objective optimization using NSGA-II
@@ -3373,7 +3598,12 @@ if __name__ == "__main__":
                        help='Configuration file path')
     parser.add_argument(
         "--mode",
-        choices=["rule_based", "ai_based"],
+        choices=[
+            "no_control",
+            "static_threshold",
+            "rule_based",
+            "ai_based",
+        ],
         help=(
             "Override experiment.mode without editing YAML"
         ),
