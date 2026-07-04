@@ -1,5 +1,13 @@
 # Auto EA-SORAN: CODE Directory - Agent-Based 5G Energy Optimization System
 
+> **Current paper-evaluation status (4 July 2026):** The definitive
+> evaluation now uses four controller scenarios, five matched seeds,
+> global timestamp alignment, Student-t confidence intervals, paired
+> hypothesis tests, Holm correction, and effect sizes. The section
+> **"July 2026 Definitive Multi-Seed Evaluation"** at the end of this
+> document supersedes the earlier single-seed pilot values, while the
+> older text is retained as implementation history.
+
 *Advanced Multi-Agent Framework for Real-Time 5G Base Station Energy Optimization with Policy Compliance*
 
 🏆 2nd Place Winner (Team : NoWiresAttached) - Build-a-thon 3.0: AI Native Bharat 5G Challenge, Indian Mobile Congress (IMC) 2025, New Delhi, India 🏆
@@ -1256,3 +1264,154 @@ The validated implementation includes:
 ### Updated Documentation Date
 
 This implementation update was added on **28 June 2026**. Detailed result notes and formulas are also maintained in `RESULTS_README.md`.
+
+---
+
+## July 2026 Definitive Multi-Seed Evaluation
+
+### Evaluation Status
+
+The final paper-facing experiment is no longer a single-seed pilot.
+It contains four controller scenarios evaluated with five matched
+random seeds (`42` through `46`):
+
+1. no control;
+2. static-threshold control;
+3. deterministic/rule-based control;
+4. safety-constrained AI closed-loop control.
+
+Every matched run is restricted to the same 57 logical timestamps
+from `5760` to `86400` seconds. Each timestamp contains all 30 cells,
+giving 1,710 cell observations per run and 34,200 aligned cell
+observations across the 20-run evaluation.
+
+The authoritative datasets are:
+
+```text
+OUTPUTs/experiments/paper_multiseed_5_safe_final_raw_v1/
+OUTPUTs/experiments/paper_multiseed_5_safe_final_analysis_v2/
+```
+
+`SHA256SUMS.txt` freezes the raw evaluation files. Smoke runs and
+directories prefixed with `qos_regression` are development evidence
+and must not be mixed with the definitive dataset.
+
+### Final Safe-AI Controller
+
+Multi-seed development exposed occasional packet loss when the AI
+reduced transmit power too aggressively. The final AI controller adds
+the following deployment safeguards:
+
+- minimum allowed transmit power of 18 dBm;
+- maximum transmit-power reduction of 3 dB per accepted control step;
+- continuation of a bounded safe-power ramp even when traffic load is
+  stable;
+- maximum predicted latency of 5 ms;
+- maximum predicted packet loss of 0.1%;
+- minimum predicted throughput retention of 95%;
+- minimum plan confidence of 0.70;
+- active-UE protection against full/deep sleep;
+- Feedback Agent validation before physical orchestration.
+
+The 3 dB ramp was selected because a tested 6 dB variant exceeded the
+packet-loss target. This tuning history is not part of the definitive
+statistical sample.
+
+### Final Scenario Results
+
+Values are means over five aligned seeds with 95% Student-t confidence
+interval half-widths.
+
+| Scenario | Energy (kWh) | Average power (W) | Throughput (Mbit/s) | Energy efficiency (Mbit/J) | Latency (ms) | Packet loss (%) |
+|---|---:|---:|---:|---:|---:|---:|
+| No control | 96.9506 +/- 0.1877 | 4252.22 +/- 8.23 | 66.9211 +/- 0.0257 | 0.015738 +/- 0.000032 | 2.6243 +/- 0.0504 | 0.0000 |
+| Static threshold | 55.3593 +/- 0.6231 | 2428.04 +/- 27.33 | 66.9134 +/- 0.0212 | 0.027560 +/- 0.000302 | 3.0868 +/- 0.1642 | 0.01145 +/- 0.02895 |
+| Deterministic | **51.2008 +/- 0.3185** | **2245.65 +/- 13.97** | 66.9208 +/- 0.0259 | **0.029801 +/- 0.000184** | 2.8525 +/- 0.1161 | 0.00038 +/- 0.00033 |
+| Safe AI | 53.6076 +/- 0.8704 | 2351.21 +/- 38.18 | 66.9108 +/- 0.0241 | 0.028462 +/- 0.000453 | 3.0201 +/- 0.1768 | 0.01541 +/- 0.04148 |
+
+### Paired AI Effects
+
+Positive energy saving means that AI consumed less energy than the
+named baseline.
+
+| Comparison | Energy effect | Throughput effect | Efficiency effect | Interpretation |
+|---|---:|---:|---:|---|
+| AI vs no control | **44.706% +/- 0.917% saving** | -0.015% +/- 0.041% | **+80.850% +/- 3.004%** | Large energy and efficiency improvement with unchanged throughput. |
+| AI vs static threshold | **3.166% +/- 0.830% saving** | -0.004% +/- 0.013% | **+3.269% +/- 0.895%** | Safe AI improves the simple operator baseline. |
+| AI vs deterministic | **-4.703% +/- 1.859% saving** | -0.015% +/- 0.042% | **-4.491% +/- 1.698%** | The specialized deterministic controller remains more energy-efficient. |
+
+Paired t-tests with Holm correction support all three energy and
+energy-efficiency differences at `alpha=0.05`. Throughput differences
+are not significant. Because only five pairs are available, exact
+two-sided Wilcoxon tests have limited resolution and are reported as a
+secondary robustness check rather than used to claim non-parametric
+significance.
+
+### Applied AI Energy-Saving Modes
+
+Across the five aligned AI runs:
+
+| Mode | Cell snapshots | Share |
+|---|---:|---:|
+| Active | 896 | 10.48% |
+| Light sleep | 7,654 | 89.52% |
+| Full/deep sleep | 0 | 0.00% |
+
+The absence of AI full sleep is expected under the final active-UE
+safety guard. Light sleep is a requested/modelled energy-saving state;
+it must not be described as physical full-radio shutdown.
+
+### Statistical and Plot Artifacts
+
+The definitive analysis directory contains:
+
+- `run_summary.csv` -- one KPI summary per scenario and seed;
+- `scenario_summary.csv` -- means, standard deviations, and 95%
+  Student-t intervals;
+- `paired_comparison.csv` -- one matched AI effect per seed and
+  baseline;
+- `paired_comparison_summary.csv` -- aggregate paired effects;
+- `statistical_tests.csv` -- paired t-tests, Wilcoxon signed-rank
+  tests, Holm-adjusted p-values, and Cohen's `dz`;
+- `timestamp_alignment.csv` -- original and retained timestamp counts;
+- `formula_metadata.json` -- KPI formulas and provenance notes;
+- `kpi_comparison.png`;
+- `hourly_profiles.png`;
+- `es_modes_by_traffic.png`;
+- `energy_throughput_tradeoff.png`;
+- `paired_energy_savings_by_seed.png`.
+
+### Final Research Claims
+
+The final evidence supports the following statements:
+
+- safe AI reduces represented energy by approximately 44.7% relative
+  to no control and 3.17% relative to static-threshold control;
+- aggregate throughput is statistically unchanged in the tested
+  scenarios;
+- all final AI run-level packet-loss values remain below the configured
+  0.1% limit and mean latency remains below 5 ms;
+- deterministic control is approximately 4.70% more energy-efficient
+  than safe AI in this topology;
+- the safety-constrained AI result demonstrates adaptive closed-loop
+  operation and policy validation, not universal superiority over a
+  purpose-built deterministic controller.
+
+These are simulation results using `simu5g_runtime_signals` and an
+`analytical_load_model`. They must not be represented as direct field
+measurements from commercial radio equipment.
+
+### Final Analysis Command
+
+Run from `CODE/`:
+
+```bash
+python -u analyze_experiments.py \
+  --input-dir ../OUTPUTs/experiments/paper_multiseed_5_safe_final_raw_v1 \
+  --output-dir ../OUTPUTs/experiments/paper_multiseed_5_safe_final_analysis_v2
+```
+
+### Updated Documentation Date
+
+The definitive multi-seed evaluation section was added on
+**4 July 2026**.
